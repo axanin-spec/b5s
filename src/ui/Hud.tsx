@@ -72,6 +72,49 @@ function Minimap() {
   return <canvas ref={ref} className="minimap" width={300} height={300} />
 }
 
+/** Space radio: a caravan in range hails us — quick deals without docking (Этап 5b). */
+function RadioPanel({ radio }: { radio: NonNullable<Snapshot['radio']> }) {
+  const api = () => gameApi.current
+  return (
+    <div className="radio-panel hud-panel">
+      <div className="radio-head">📡 РАДИО · {radio.name}</div>
+      {radio.sells.length > 0 && (
+        <div className="radio-sec">
+          <div className="radio-sec-title">ПРОДАЁТ</div>
+          {radio.sells.map((s) => (
+            <div className="radio-row" key={`s-${s.goodId}`}>
+              <span className="radio-good">{s.name}</span>
+              <span className="radio-price">₡{fmt(s.unit)}<i>×{s.qty}</i></span>
+              <span className="radio-acts">
+                <button className="radio-btn" onClick={() => api()?.radioBuy(radio.shipIdx, s.goodId, 1)}>+1</button>
+                <button className="radio-btn" onClick={() => api()?.radioBuy(radio.shipIdx, s.goodId, s.qty)}>всё</button>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      {radio.buys.length > 0 && (
+        <div className="radio-sec">
+          <div className="radio-sec-title">КУПАЕТ</div>
+          {radio.buys.map((b) => (
+            <div className="radio-row" key={`b-${b.goodId}`}>
+              <span className="radio-good">{b.name}</span>
+              <span className="radio-price">₡{fmt(b.unit)}<i>×{b.maxQty}</i></span>
+              <span className="radio-acts">
+                <button className="radio-btn sell" onClick={() => api()?.radioSell(radio.shipIdx, b.goodId, 1)}>−1</button>
+                <button className="radio-btn sell" onClick={() => api()?.radioSell(radio.shipIdx, b.goodId, b.maxQty)}>всё</button>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      {radio.sells.length === 0 && radio.buys.length === 0 && (
+        <div className="radio-empty">трюм пуст, кошелёк пуст</div>
+      )}
+    </div>
+  )
+}
+
 export function Hud({ snap, isTouch }: { snap: Snapshot; isTouch: boolean }) {
   const hud = snap.hud!
   const api = () => gameApi.current
@@ -166,6 +209,11 @@ export function Hud({ snap, isTouch }: { snap: Snapshot; isTouch: boolean }) {
         <button className="dock-btn gate" onClick={() => api()?.jump()}>
           ⇄ Гиперпрыжок: {hud.gateName}{!isTouch && <kbd>E</kbd>}
         </button>
+      )}
+
+      {/* space radio: a caravan in range offers quick deals without docking (Этап 5b) */}
+      {snap.screen === 'playing' && !hud.dockName && snap.radio && snap.radio.name && (
+        <RadioPanel radio={snap.radio} />
       )}
 
       {/* touch controls */}

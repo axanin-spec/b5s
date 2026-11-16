@@ -187,6 +187,24 @@ export const ECONOMY = {
 } as const;
 
 /* ------------------------------------------------------------------ */
+/* Trader AI (Этап 5b): living caravans + space radio deals            */
+/* ------------------------------------------------------------------ */
+
+export const TRADER_AI = {
+  /** Cargo capacity per trader ship (units). */
+  HOLD: 24,
+  /** Working capital range granted from the Alliance fund at spawn (₡). */
+  CASH: [6000, 14000] as const,
+  /** Radio deals: the trader sells above and buys below its last market price. */
+  RADIO_SELL: 1.18,
+  RADIO_BUY: 0.68,
+  /** Radio offer appears within this distance of the player (world units). */
+  RADIO_RANGE: 1500,
+  /** Per-unit price push from trader volume at a dock (pulls markets to equilibrium). */
+  FLUCT_PUSH: 0.004,
+} as const;
+
+/* ------------------------------------------------------------------ */
 /* Reputation                                                          */
 /* ------------------------------------------------------------------ */
 

@@ -101,6 +101,19 @@ export interface StationSnapshot {
   }[];
 }
 
+/** Space radio deal with a nearby caravan (Этап 5b): sells = what it hawks, buys = what it lifts. */
+export interface RadioSnapshot {
+  shipIdx: number;
+  /** Trader callsign for the radio header. */
+  name: string;
+  /** What the caravan sells to us, priced at its home-market markup. */
+  sells: { goodId: string; name: string; qty: number; unit: number }[];
+  /** What the caravan would lift from us (limited by its wallet and hold). */
+  buys: { goodId: string; name: string; unit: number; maxQty: number }[];
+  wallet: number;
+  holdFree: number;
+}
+
 export interface EndStats {
   victory: boolean;
   reason: string;
@@ -124,6 +137,8 @@ export interface Snapshot {
   /** Star chart overlay (M) — the game keeps running behind it. */
   mapOpen: boolean;
   map: MapSnapshot | null;
+  /** Live radio offer from the nearest caravan in range, null = nobody on the band. */
+  radio: RadioSnapshot | null;
 }
 
 const INITIAL: Snapshot = {
@@ -137,6 +152,7 @@ const INITIAL: Snapshot = {
   news: null,
   mapOpen: false,
   map: null,
+  radio: null,
 };
 
 /** Commands from React UI into the game. Populated by boot.ts once the game exists. */
@@ -165,6 +181,10 @@ export interface GameApi {
   cancelContract(): void;
   /** Pay the patrol tribunal: clears the wanted flag, restores patrol standing. */
   payFine(): void;
+  /** Radio deal (5b): buy qty units from the caravan at shipIdx, money player→wallet. */
+  radioBuy(shipIdx: number, goodId: string, qty: number): void;
+  /** Radio deal (5b): sell qty units to the caravan, money wallet→player. */
+  radioSell(shipIdx: number, goodId: string, qty: number): void;
   /** Minimap blips: x/y normalized to [-1,1], color css, size px, o=1 → objective diamond, w=1 → waypoint ring. */
   getMinimap(): { x: number; y: number; c: string; s: number; o?: 1; w?: 1 }[];
   getPlayerHeading(): { x: number; y: number; a: number };

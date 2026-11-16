@@ -40,6 +40,12 @@ export interface Ship {
   wanderT: number;
   /** Trader route: dockable indices. */
   routeFrom: number; routeTo: number;
+  /** Trader: callsign for the radio panel ("Гера"). */
+  name: string;
+  /** Trader: working capital — money is counted outside pools while in its pocket (Этап 5b). */
+  wallet: number;
+  /** Trader: arbitrage cargo, good id → units (capacity TRADER_AI.HOLD). */
+  cargo: Record<string, number>;
   /** Escort contract this ship is protecting (contract id, -1 = none). */
   escortId: number;
   /** Convoy-raid event this ship belongs to (event id, -1 = none). */

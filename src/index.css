@@ -242,6 +242,38 @@ kbd {
 .share-label { font-size: 10px; color: var(--text-dim); letter-spacing: 0.06em; font-variant-numeric: tabular-nums; }
 .hud-share.won .share-label { color: var(--gold); font-weight: 700; }
 
+/* космическое радио: торговый караван в эфире (Этап 5b) */
+.radio-panel {
+  position: fixed; left: 14px; bottom: 110px; z-index: 30;
+  width: 282px; padding: 8px 10px 9px;
+  font: 11px/1.45 ui-monospace, "Cascadia Mono", Consolas, monospace;
+  clip-path: polygon(0 10px, 10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%);
+  animation: radio-in 0.25s ease-out;
+}
+@keyframes radio-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.radio-head {
+  color: #ffd98a; font-weight: 700; font-size: 11px; letter-spacing: 0.1em;
+  text-shadow: 0 0 9px rgba(255, 179, 71, 0.6); margin-bottom: 5px;
+  border-bottom: 1px solid rgba(255, 210, 74, 0.25); padding-bottom: 4px;
+}
+.radio-sec { margin-top: 4px; }
+.radio-sec-title { color: var(--text-dim); font-size: 9px; letter-spacing: 0.18em; margin-bottom: 2px; }
+.radio-row { display: flex; align-items: center; gap: 6px; padding: 1px 0; }
+.radio-good { flex: 1; color: #cfe8e2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.radio-price { color: var(--gold); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.radio-price i { font-style: normal; color: var(--text-dim); margin-left: 3px; }
+.radio-acts { display: flex; gap: 4px; }
+.radio-btn {
+  font: 600 10px ui-monospace, Consolas, monospace;
+  padding: 2px 7px; cursor: pointer;
+  color: #7dffe0; background: rgba(10, 30, 34, 0.75);
+  border: 1px solid rgba(84, 255, 210, 0.45); border-radius: 2px;
+}
+.radio-btn:hover { background: rgba(84, 255, 210, 0.18); }
+.radio-btn.sell { color: #ffcf6e; border-color: rgba(255, 210, 74, 0.5); }
+.radio-btn.sell:hover { background: rgba(255, 210, 74, 0.16); }
+.radio-empty { color: var(--text-dim); font-size: 10px; padding: 3px 0; }
+
 /* stage 3 · always-on reputation chips in the HUD                        */
 .hud-rep { display: flex; gap: 6px; margin-top: 6px; }
 .rep-chip {

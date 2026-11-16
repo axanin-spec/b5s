@@ -7,7 +7,7 @@
 
 import {
   BOLT_CFG, CONTRACTS, CONVOY, ECONOMY, FACTION_CFG, GATE_CFG, GOODS, OCCUPATION, PLAYER_CFG, POPULATION, QUALITY,
-  MONEY_TOTAL, POOLS, REPAIR_COST_PER_HP, REP, SAVE_VERSION, AUTOSAVE_INTERVAL, SHIELD_REGEN, SYSTEMS, UPGRADE_DEFS,
+  MONEY_TOTAL, POOLS, REPAIR_COST_PER_HP, REP, SAVE_VERSION, AUTOSAVE_INTERVAL, SHIELD_REGEN, SYSTEMS, TRADER_AI, UPGRADE_DEFS,
   VICTORY_SHARE, WEAPON_RATE, WEAPON_SHOTS, WORLD_CFG,
 } from "./config";
 import { AudioSystem } from "./audio";
@@ -24,7 +24,7 @@ import type { SystemDef } from "./config";
 import { loadImage, loadPlanetTexture } from "./assets";
 import { economyTick, findDockTarget, generateWorld, goodName, kindName, priceOf, refreshAllPrices, updateOrbits } from "./world";
 import { loadSave, writeSave } from "./save";
-import { gameApi, uiBridge, type EndStats, type GameApi, type HudData, type MapSnapshot, type StationSnapshot } from "./uiBridge";
+import { gameApi, uiBridge, type EndStats, type GameApi, type HudData, type MapSnapshot, type RadioSnapshot, type StationSnapshot } from "./uiBridge";
 import type { ActiveContract, Bolt, ContractOffer, Dockable, Faction, MoneyPools, OccupationState, Pickup, PlayerState, PoolId, SaveGame, Ship, UpgradeId } from "./types";
 import { AiState } from "./types";
 
@@ -43,7 +43,8 @@ function blankShip(): Ship {
     accel: 0, maxSpeed: 0, radius: 20,
     dmg: 0, fireRate: 0, fireCooldown: 0, sinceHit: 99,
     ai: AiState.Wander, targetIdx: -1, tx: 0, ty: 0, wanderT: 0,
-    routeFrom: 0, routeTo: 0, escortId: -1, raidId: -1, thinkT: 0, trailT: 0, sprite: null,
+    routeFrom: 0, routeTo: 0, name: "", wallet: 0, cargo: {},
+    escortId: -1, raidId: -1, thinkT: 0, trailT: 0, sprite: null,
   };
 }
 
@@ -469,27 +470,235 @@ export class Game {
       s.targetIdx = -1;
       s.ai = faction === "trader" ? AiState.Route : AiState.Wander;
       s.tx = x; s.ty = y;
-      if (faction === "trader") this.pickTraderRoute(i);
+      if (faction === "trader") {
+        // working capital is Alliance money until spent (5b): a poor Alliance sends poor ships
+        s.name = CONTRACTS.CALLSIGNS[Math.floor(this.rnd() * CONTRACTS.CALLSIGNS.length)];
+        s.wallet = Math.min(
+          Math.round(TRADER_AI.CASH[0] + this.rnd() * (TRADER_AI.CASH[1] - TRADER_AI.CASH[0])),
+          Math.max(0, Math.round(this.pools.alliance)),
+        );
+        this.pools.alliance -= s.wallet;
+        // a starter hold so freshly launched ships have something to hawk
+        for (let k = 0; k < 2; k++) {
+          const g = GOODS[Math.floor(this.rnd() * GOODS.length)];
+          s.cargo[g.id] = (s.cargo[g.id] ?? 0) + 3 + Math.floor(this.rnd() * 4);
+        }
+        this.pickTraderRoute(i);
+      }
       return i;
     }
     return -1;
   }
 
   private freeShip(i: number): void {
-    this.ships[i].active = false;
+    const s = this.ships[i];
+    if (s.active && s.faction === "trader" && s.wallet > 0) {
+      this.pools.alliance += s.wallet; // the fleet's working capital returns to the fund
+      s.wallet = 0;
+    }
+    s.active = false;
     if (this.bossIdx === i) this.bossIdx = -1;
     // drop dangling target references
-    for (const s of this.ships) if (s.active && s.targetIdx === i) s.targetIdx = -1;
+    for (const sh of this.ships) if (sh.active && sh.targetIdx === i) sh.targetIdx = -1;
   }
 
+  /** Units of cargo in a trader hold. */
+  private traderLoad(s: Ship): number {
+    let n = 0;
+    for (const g of GOODS) n += Math.round(s.cargo[g.id] ?? 0);
+    return n;
+  }
+
+  /** Trader trade volume nudges the local price toward equilibrium (Этап 5b). */
+  private pushFluct(d: Dockable, goodId: string, delta: number): void {
+    const cur = d.fluct[goodId] ?? 1;
+    d.fluct[goodId] = Math.min(ECONOMY.FLUCT_MAX, Math.max(ECONOMY.FLUCT_MIN, cur + delta));
+  }
+
+  /**
+   * Where to sail next (Этап 5b): with cargo — the dock where the hold sells for most;
+   * empty — the dock where the biggest buy→sell spread awaits. Small jitter keeps the
+   * five caravans from all chasing the same trade.
+   */
   private pickTraderRoute(idx: number): void {
     const s = this.ships[idx];
     const n = this.dockables.length;
-    let to = Math.floor(this.rnd() * n);
-    if (to === s.routeFrom) to = (to + 1) % n;
-    s.routeTo = to;
-    const d = this.dockables[to];
+    if (n === 0) return;
+    const loaded = this.traderLoad(s) > 0;
+    let best = -1, bestV = -Infinity;
+    for (let j = 0; j < n; j++) {
+      if (n > 1 && j === s.routeFrom) continue; // we are standing at routeFrom
+      const d = this.dockables[j];
+      let v: number;
+      if (loaded) {
+        v = 0;
+        for (const g of GOODS) v += priceOf(d, g.id) * ECONOMY.SELL_FACTOR * Math.round(s.cargo[g.id] ?? 0);
+      } else {
+        // best spread: buy cheap here, sell dear at the far side
+        v = -Infinity;
+        for (const g of GOODS) {
+          let far = 0;
+          for (let k = 0; k < n; k++) {
+            if (k === j) continue;
+            const p = priceOf(this.dockables[k], g.id) * ECONOMY.SELL_FACTOR;
+            if (p > far) far = p;
+          }
+          const spread = far - priceOf(d, g.id);
+          if (spread > v) v = spread;
+        }
+      }
+      v *= 1 + (this.rnd() - 0.5) * 0.25;
+      if (v > bestV) { bestV = v; best = j; }
+    }
+    s.routeTo = best < 0 ? (s.routeFrom + 1) % n : best;
+    const d = this.dockables[s.routeTo];
     s.tx = d.x; s.ty = d.y;
+  }
+
+  /**
+   * Market call (Этап 5b): on arrival the caravan sells its hold, then buys the good
+   * that promises the fattest margin elsewhere. Wallet ↔ local till; each ton traded
+   * pushes the price back toward equilibrium, so the fleet self-corrects the market.
+   */
+  private traderTrade(idx: number): void {
+    const s = this.ships[idx];
+    const here = this.dockables[s.routeTo];
+    if (!here) return;
+    const pool: PoolId = this.hereOccupied() ? "clan" : "stations";
+
+    // 1) sell everything the market can still pay for
+    for (const g of GOODS) {
+      const q = Math.round(s.cargo[g.id] ?? 0);
+      if (q <= 0) continue;
+      const unit = Math.max(1, Math.round(priceOf(here, g.id) * ECONOMY.SELL_FACTOR));
+      const affordable = Math.floor(Math.max(0, Math.round(this.pools[pool])) / unit);
+      const sold = Math.min(q, affordable);
+      if (sold <= 0) continue; // empty till — carry the cargo around the block
+      s.cargo[g.id] = q - sold;
+      if (s.cargo[g.id] <= 0) delete s.cargo[g.id];
+      const income = sold * unit;
+      this.pools[pool] -= income;
+      s.wallet += income;
+      this.pushFluct(here, g.id, -TRADER_AI.FLUCT_PUSH * sold);
+    }
+
+    // 2) buy the best margin we can afford (leave 5% ballast)
+    const room = TRADER_AI.HOLD - this.traderLoad(s);
+    let budget = Math.floor(s.wallet * 0.95);
+    if (room > 0 && budget > 0) {
+      let bestG: string | null = null, bestMargin = 8; // ₡8/unit before a caravan lifts anchor
+      for (const g of GOODS) {
+        let far = 0;
+        for (let k = 0; k < this.dockables.length; k++) {
+          if (k === s.routeTo) continue;
+          const p = priceOf(this.dockables[k], g.id) * ECONOMY.SELL_FACTOR;
+          if (p > far) far = p;
+        }
+        const margin = far - priceOf(here, g.id);
+        if (margin > bestMargin) { bestMargin = margin; bestG = g.id; }
+      }
+      if (bestG) {
+        const unit = Math.max(1, Math.round(priceOf(here, bestG)));
+        const till = Math.floor(Math.max(0, Math.round(this.pools[pool])) / unit);
+        const q = Math.max(0, Math.min(room, Math.floor(budget / unit), till));
+        if (q > 0) {
+          s.cargo[bestG] = (s.cargo[bestG] ?? 0) + q;
+          s.wallet -= q * unit;
+          this.pools[pool] += q * unit;
+          this.pushFluct(here, bestG, TRADER_AI.FLUCT_PUSH * q);
+        }
+      }
+    }
+    this.pickTraderRoute(idx);
+  }
+
+  /** Closest caravan on the radio band, -1 = none in range (Этап 5b). */
+  private radioIdx(): number {
+    if (this.sm.state !== "playing") return -1;
+    const p = this.ships[0];
+    let best = -1, bestD: number = TRADER_AI.RADIO_RANGE;
+    for (let i = 1; i < MAX_SHIPS; i++) {
+      const s = this.ships[i];
+      if (!s.active || s.faction !== "trader") continue;
+      const dd = Math.hypot(s.x - p.x, s.y - p.y) - s.radius;
+      if (dd <= bestD) { bestD = dd; best = i; }
+    }
+    return best;
+  }
+
+  /** Radio offer: the caravan quotes against the market it last left (Этап 5b). */
+  radioData(): RadioSnapshot | null {
+    const i = this.radioIdx();
+    if (i < 0) return null;
+    const s = this.ships[i];
+    const home = this.dockables[Math.min(Math.max(s.routeFrom, 0), this.dockables.length - 1)];
+    const sells: RadioSnapshot["sells"] = [];
+    const buys: RadioSnapshot["buys"] = [];
+    const room = TRADER_AI.HOLD - this.traderLoad(s);
+    for (const g of GOODS) {
+      const base = priceOf(home, g.id);
+      const q = Math.round(s.cargo[g.id] ?? 0);
+      if (q > 0) {
+        const unit = Math.max(1, Math.round(base * TRADER_AI.RADIO_SELL));
+        sells.push({ goodId: g.id, name: g.name, qty: q, unit });
+      }
+      const have = this.player.cargo[g.id] ?? 0;
+      if (have > 0 && room > 0) {
+        const unit = Math.max(1, Math.round(base * TRADER_AI.RADIO_BUY));
+        const maxQty = Math.min(have, room, Math.floor(Math.max(0, s.wallet) / unit));
+        if (maxQty > 0) buys.push({ goodId: g.id, name: g.name, unit, maxQty });
+      }
+    }
+    return { shipIdx: i, name: s.name || "Караван", sells, buys, wallet: Math.round(s.wallet), holdFree: Math.max(0, room) };
+  }
+
+  /** Radio purchase: credits go straight into the caravan's pocket — pools untouched (5b). */
+  radioBuy(shipIdx: number, goodId: string, qty: number): boolean {
+    const s = this.ships[shipIdx];
+    if (!s.active || s.faction !== "trader") return false;
+    const home = this.dockables[Math.min(Math.max(s.routeFrom, 0), this.dockables.length - 1)];
+    const unit = Math.max(1, Math.round(priceOf(home, goodId) * TRADER_AI.RADIO_SELL));
+    const n = Math.max(0, Math.min(
+      Math.floor(qty),
+      Math.round(s.cargo[goodId] ?? 0),
+      this.cargoMax() - this.cargoUsed(),
+      Math.floor(this.player.credits / unit),
+    ));
+    if (n <= 0) return false;
+    this.player.credits -= n * unit;
+    s.wallet += n * unit;
+    s.cargo[goodId] = Math.round((s.cargo[goodId] ?? 0) - n);
+    if (s.cargo[goodId] <= 0) delete s.cargo[goodId];
+    this.player.cargo[goodId] = (this.player.cargo[goodId] ?? 0) + n;
+    this.player.traded += 1;
+    this.audio.sfx("trade");
+    this.pushHud();
+    return true;
+  }
+
+  /** Radio sale: the caravan pays from its wallet and stows the goods in its hold (5b). */
+  radioSell(shipIdx: number, goodId: string, qty: number): boolean {
+    const s = this.ships[shipIdx];
+    if (!s.active || s.faction !== "trader") return false;
+    const home = this.dockables[Math.min(Math.max(s.routeFrom, 0), this.dockables.length - 1)];
+    const unit = Math.max(1, Math.round(priceOf(home, goodId) * TRADER_AI.RADIO_BUY));
+    const n = Math.max(0, Math.min(
+      Math.floor(qty),
+      this.player.cargo[goodId] ?? 0,
+      TRADER_AI.HOLD - this.traderLoad(s),
+      Math.floor(Math.max(0, s.wallet) / unit),
+    ));
+    if (n <= 0) return false;
+    s.wallet -= n * unit;
+    this.player.credits += n * unit;
+    this.player.earned += n * unit;
+    this.player.cargo[goodId] = (this.player.cargo[goodId] ?? 0) - n;
+    if (this.player.cargo[goodId] <= 0) delete this.player.cargo[goodId];
+    s.cargo[goodId] = (s.cargo[goodId] ?? 0) + n;
+    this.player.traded += 1;
+    this.audio.sfx("trade");
+    this.pushHud();
+    return true;
   }
 
   private spawnAtEdge(faction: Faction): void {
@@ -611,17 +820,26 @@ export class Game {
     // loot — credits are somebody's money: clans pay for their crews, the Alliance
     // for its freight, the patrol for its hulls (closed circulation, Этап 5a)
     const cfg = FACTION_CFG[s.faction as keyof typeof FACTION_CFG];
-    if (cfg && cfg.bounty[1] > 0) {
+    if (cfg && cfg.bounty[1] > 0 && s.faction !== "trader") {
       const amount = Math.round(cfg.bounty[0] + this.rnd() * (cfg.bounty[1] - cfg.bounty[0]));
-      const src: PoolId = s.faction === "trader" ? "alliance" : s.faction === "patrol" ? "patrol" : "clan";
+      const src: PoolId = s.faction === "patrol" ? "patrol" : "clan";
       this.spawnPickup("credits", "", amount, s.x, s.y, src);
     }
-    if (s.faction === "trader" || (s.faction === "pirate" && this.rnd() < 0.4)) {
-      const pods = s.faction === "trader" ? 2 : 1;
-      for (let i = 0; i < pods; i++) {
-        const g = GOODS[Math.floor(this.rnd() * GOODS.length)];
-        this.spawnPickup("cargo", g.id, 2 + Math.floor(this.rnd() * 6), s.x + (this.rnd() - 0.5) * 160, s.y + (this.rnd() - 0.5) * 160);
+    if (s.faction === "trader") {
+      // the real hold spills as pods, working capital as credits (Этап 5b). freeShip has
+      // already handed the wallet to the Alliance fund, so the pickup pays out of it.
+      let pods = 0;
+      for (const g of GOODS) {
+        const q = Math.round(s.cargo[g.id] ?? 0);
+        if (q <= 0 || pods >= 3) continue;
+        pods++;
+        this.spawnPickup("cargo", g.id, q, s.x + (this.rnd() - 0.5) * 160, s.y + (this.rnd() - 0.5) * 160);
       }
+      s.cargo = {};
+      if (s.wallet > 0) this.spawnPickup("credits", "", Math.round(s.wallet), s.x, s.y, "alliance");
+    } else if (s.faction === "pirate" && this.rnd() < 0.4) {
+      this.spawnPickup("cargo", GOODS[Math.floor(this.rnd() * GOODS.length)].id,
+        2 + Math.floor(this.rnd() * 6), s.x + (this.rnd() - 0.5) * 160, s.y + (this.rnd() - 0.5) * 160);
     }
 
     if (byPlayer) {
@@ -966,7 +1184,9 @@ export class Game {
         systemId: this.occ.systemId, held: this.occ.held,
         t: Math.round(this.occ.t), flagshipBuilt: this.occ.flagshipBuilt,
       },
-      pools: { ...this.pools },
+      // traders respawn on continue and re-draw their capital, so the saved Alliance
+      // must already include their wallets (gross pools — Этап 5b)
+      pools: { ...this.pools, alliance: this.pools.alliance + this.traderFloat() },
       bossKills: this.player.bossKills,
       victoryShown: this.player.victoryShown,
       savedAt: Date.now(),
@@ -1003,11 +1223,22 @@ export class Game {
     return this.player.credits / MONEY_TOTAL;
   }
 
+  /**
+   * Credits sitting in traders' wallets (Этап 5b). This is Alliance money on loan:
+   * drawn from pools.alliance at spawn, returned at freeShip, pocketed by the player on a kill.
+   */
+  private traderFloat(): number {
+    let f = 0;
+    for (const s of this.ships) if (s.active && s.faction === "trader") f += Math.round(s.wallet);
+    return f;
+  }
+
   /** Debug/QA: the closed-circulation invariant. delta must stay 0 — see the balance autotest. */
-  econAudit(): { total: number; player: number; pools: MoneyPools; delta: number } {
+  econAudit(): { total: number; player: number; pools: MoneyPools; traderFloat: number; delta: number } {
     const sum = this.pools.patrol + this.pools.alliance + this.pools.clan + this.pools.stations;
+    const float = this.traderFloat();
     const player = Math.round(this.player.credits);
-    return { total: MONEY_TOTAL, player, pools: { ...this.pools }, delta: sum + player - MONEY_TOTAL };
+    return { total: MONEY_TOTAL, player, pools: { ...this.pools }, traderFloat: float, delta: sum + float + player - MONEY_TOTAL };
   }
 
   private endStats(victory: boolean, reason: string): EndStats {
@@ -1062,6 +1293,7 @@ export class Game {
     }
     // fresh broker offers on every undock cycle while the board is free
     if (!this.contract) this.genOffers(this.dockTarget);
+    uiBridge.set({ radio: null }); // nobody hails you through the hull
     this.pushStation();
   }
 
@@ -1907,7 +2139,7 @@ export class Game {
             s.escortId = -1;
           }
         }
-        this.pickTraderRoute(i);
+        this.traderTrade(i); // sell the hold, buy the best margin, sail on (Этап 5b)
       }
       return;
     }
@@ -2475,7 +2707,8 @@ export class Game {
         ? Math.round(Math.hypot(this.waypoint.x - p.x, this.waypoint.y - p.y))
         : 0,
     };
-    uiBridge.set({ hud });
+    // radio offer refreshed with the HUD — a caravan in range appears on the band live
+    uiBridge.set({ hud, radio: this.radioData() });
   }
 
   private pushStation(): void {
@@ -2670,6 +2903,8 @@ export class Game {
       acceptContract: (id) => this.acceptContract(id),
       cancelContract: () => this.cancelContract(),
       payFine: () => this.payFine(),
+      radioBuy: (i, g, q) => { this.radioBuy(i, g, q); },
+      radioSell: (i, g, q) => { this.radioSell(i, g, q); },
       getMinimap: () => this.minimapData(),
       getPlayerHeading: () => {
         const p = this.ships[0];
