@@ -75,7 +75,10 @@ export const FACTION_CFG = {
 
 /** Target populations kept alive by the spawner. */
 export const POPULATION = {
+  /** Full pirate strength while the clan fund is rich (≥ PIRATE_ECON.FUND_FULL). */
   PIRATES: 9,
+  /** Thinned flotilla once the clan fund runs thin (≤ PIRATE_ECON.FUND_THIN). */
+  PIRATES_MIN: 6,
   PATROLS: 6,
   TRADERS: 5,
   SPAWN_PERIOD: 3.2,
@@ -137,6 +140,25 @@ export const MONEY_TOTAL = POOLS.patrol + POOLS.alliance + POOLS.clan + POOLS.st
 
 /** Economic victory: own this share of the galaxy's credits (market-share progress bar in the HUD). */
 export const VICTORY_SHARE = 0.25;
+
+/* ------------------------------------------------------------------ */
+/* Pirate clan economy (Этап 5c: каждый потопленный корпус бьёт по фонду) */
+/* ------------------------------------------------------------------ */
+
+export const PIRATE_ECON = {
+  /** Sunk hulls write off from the clan fund to the civilian yards (clan → stations). */
+  HULL_COST: { pirate: 2600, boss: 60_000 },
+  /** Debt ceiling: the clans cannot owe more than their own starting treasury. */
+  DEBT_LIMIT: POOLS.clan,
+  /** Fund at/above this (credits) keeps full pirate numbers (POPULATION.PIRATES). */
+  FUND_FULL: 250_000,
+  /** Fund at/below this thins the flotilla to POPULATION.PIRATES_MIN. */
+  FUND_THIN: 60_000,
+  /** Protection tax per second from the occupied system's economy (stations → clan). */
+  TAX_PER_SEC: 26,
+  /** A convoy lost to raiders: the clans take this from the Alliance fund (alliance → clan). */
+  RAID_PLUNDER: 1_200,
+} as const;
 
 /* ------------------------------------------------------------------ */
 /* Economy                                                             */

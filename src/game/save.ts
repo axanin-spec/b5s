@@ -63,11 +63,12 @@ export function loadSave(): SaveGame | null {
   if (typeof s.occupation !== "object" || s.occupation === null) return null;
   if (typeof s.occupation.systemId !== "string" || !isBool(s.occupation.held) || !isNum(s.occupation.t) || !isBool(s.occupation.flagshipBuilt)) return null;
   if (!isNum(s.bossKills) || s.bossKills < 0) return null;
-  // v6: closed money pools — every pool must be a sane finite number
+  // v6: closed money pools — sane finite numbers; the clan fund may run into debt
+  // (Этап 5c hull write-offs) but never below -MONEY_TOTAL
   if (typeof s.pools !== "object" || s.pools === null) return null;
   for (const k of Object.keys(POOLS)) {
     const v = (s.pools as Record<string, unknown>)[k];
-    if (!isNum(v) || v < 0 || v > MONEY_TOTAL) return null;
+    if (!isNum(v) || v < -MONEY_TOTAL || v > MONEY_TOTAL) return null;
   }
   return s;
 }

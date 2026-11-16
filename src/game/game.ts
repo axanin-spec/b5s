@@ -6,7 +6,7 @@
  */
 
 import {
-  BOLT_CFG, CONTRACTS, CONVOY, ECONOMY, FACTION_CFG, GATE_CFG, GOODS, OCCUPATION, PLAYER_CFG, POPULATION, QUALITY,
+  BOLT_CFG, CONTRACTS, CONVOY, ECONOMY, FACTION_CFG, GATE_CFG, GOODS, OCCUPATION, PIRATE_ECON, PLAYER_CFG, POPULATION, QUALITY,
   MONEY_TOTAL, POOLS, REPAIR_COST_PER_HP, REP, SAVE_VERSION, AUTOSAVE_INTERVAL, SHIELD_REGEN, SYSTEMS, TRADER_AI, UPGRADE_DEFS,
   VICTORY_SHARE, WEAPON_RATE, WEAPON_SHOTS, WORLD_CFG,
 } from "./config";
@@ -822,7 +822,10 @@ export class Game {
     const cfg = FACTION_CFG[s.faction as keyof typeof FACTION_CFG];
     if (cfg && cfg.bounty[1] > 0 && s.faction !== "trader") {
       const amount = Math.round(cfg.bounty[0] + this.rnd() * (cfg.bounty[1] - cfg.bounty[0]));
-      const src: PoolId = s.faction === "patrol" ? "patrol" : "clan";
+      // Pirate bounties come out of the patrol treasury (5c): an empty treasury makes
+      // them "deflate" — gain() pays what little it has left. The flagship's ransom
+      // is still clan money: the coffers of the occupation, captured with the wreck.
+      const src: PoolId = s.faction === "boss" ? "clan" : "patrol";
       this.spawnPickup("credits", "", amount, s.x, s.y, src);
     }
     if (s.faction === "trader") {
@@ -840,6 +843,14 @@ export class Game {
     } else if (s.faction === "pirate" && this.rnd() < 0.4) {
       this.spawnPickup("cargo", GOODS[Math.floor(this.rnd() * GOODS.length)].id,
         2 + Math.floor(this.rnd() * 6), s.x + (this.rnd() - 0.5) * 160, s.y + (this.rnd() - 0.5) * 160);
+    }
+    // Every sunken hull writes off the clan fund: the clans pay the civilian yards for
+    // a replacement (5c). The fund thins — the spawner posts fewer pirates back in line.
+    if (s.faction === "pirate" || s.faction === "boss") {
+      const cost = s.faction === "boss" ? PIRATE_ECON.HULL_COST.boss : PIRATE_ECON.HULL_COST.pirate;
+      const paid = Math.min(cost, this.pools.clan + PIRATE_ECON.DEBT_LIMIT); // debt caps at the clans' own treasury
+      this.pools.clan -= paid;
+      this.pools.stations += paid;
     }
 
     if (byPlayer) {
@@ -865,7 +876,7 @@ export class Game {
     // scripted-event bookkeeping runs regardless of who pulled the trigger
     if (this.convoy) {
       if (idx === this.convoy.traderIdx) {
-        this.endConvoy(false, "Конвой разбит — рейдеры уходят с добычей.");
+        this.endConvoy(false, "Конвой разбит — рейдеры уходят с добычей.", true);
       } else if (byPlayer && s.faction === "pirate" && s.raidId === this.convoy.id) {
         this.convoy.done++;
         if (this.convoy.done >= CONVOY.NEED) this.endConvoy(true, "Рейдеры обратились в бегство, конвой спасён!");
@@ -1057,7 +1068,7 @@ export class Game {
   }
 
   private spawnInitialPopulation(): void {
-    const pirates = POPULATION.PIRATES + this.systemDef.pirateBoost + (this.hereOccupied() ? OCCUPATION.PIRATE_EXTRA : 0);
+    const pirates = this.pirateStrength();
     for (let i = 0; i < pirates; i++) this.spawnAtEdge("pirate");
     // the clans have pushed the patrol out of occupied space; independent traders still run the black market
     if (!this.hereOccupied()) {
@@ -1571,7 +1582,7 @@ export class Game {
     this.audio.sfx("alarm");
   }
 
-  private endConvoy(win: boolean, reason: string): void {
+  private endConvoy(win: boolean, reason: string, plundered = false): void {
     if (!this.convoy) return;
     const id = this.convoy.id;
     this.convoy = null;
@@ -1582,6 +1593,12 @@ export class Game {
       this.addRep(CONVOY.REP);
       this.audio.sfx("credits");
       this.setNews(`${reason} Торговый альянс платит ₡${paid}.`);
+    } else if (plundered) {
+      // a successful clan raid (5c): the captured freight tops up the clan fund, paid by the Alliance
+      const loot = Math.max(0, Math.min(PIRATE_ECON.RAID_PLUNDER, Math.round(this.pools.alliance)));
+      this.pools.alliance -= loot;
+      this.pools.clan += loot;
+      this.setNews(`${reason} Добыча кланов: ₡${loot.toLocaleString("ru-RU")} — фонд пополнен.`);
     } else {
       this.setNews(reason);
     }
@@ -1893,6 +1910,15 @@ export class Game {
    * random system and the cycle starts again.
    */
   private updateOccupation(dt: number): void {
+    if (this.occ.held) {
+      // Protection tax (Этап 5c): the occupied system's yards feed the clan war chest —
+      // civilian capital (stations) trickles to the clans while the flagship holds the system.
+      const tax = Math.min(PIRATE_ECON.TAX_PER_SEC * dt, Math.max(0, this.pools.stations));
+      if (tax > 0) {
+        this.pools.stations -= tax;
+        this.pools.clan += tax;
+      }
+    }
     if (!this.occ.held) {
       this.occ.t -= dt;
       if (this.occ.t > 0) return;
@@ -1984,6 +2010,19 @@ export class Game {
     return threat;
   }
 
+  /**
+   * How strong a pirate presence the clan fund can staff (Этап 5c): rich clans post the
+   * full POPULATION.PIRATES, a thin fund keeps the flotilla at PIRATES_MIN — sinking their
+   * hulls literally thins the ranks. Interpolates linearly between PIRATE_ECON.FUND_THIN
+   * and FUND_FULL, then adds the local system/occupation modifiers.
+   */
+  private pirateStrength(): number {
+    const t = (this.pools.clan - PIRATE_ECON.FUND_THIN) / (PIRATE_ECON.FUND_FULL - PIRATE_ECON.FUND_THIN);
+    const base = POPULATION.PIRATES_MIN
+      + Math.round((POPULATION.PIRATES - POPULATION.PIRATES_MIN) * Math.max(0, Math.min(1, t)));
+    return base + this.systemDef.pirateBoost + (this.hereOccupied() ? OCCUPATION.PIRATE_EXTRA : 0);
+  }
+
   private maintainPopulation(): void {
     let pirates = 0, patrols = 0, traders = 0;
     for (let i = 1; i < MAX_SHIPS; i++) {
@@ -1993,7 +2032,7 @@ export class Game {
       else if (s.faction === "patrol") patrols++;
       else if (s.faction === "trader") traders++;
     }
-    const pirateCap = POPULATION.PIRATES + this.systemDef.pirateBoost + (this.hereOccupied() ? OCCUPATION.PIRATE_EXTRA : 0);
+    const pirateCap = this.pirateStrength();
     if (pirates < pirateCap) this.spawnAtEdge("pirate");
     if (!this.hereOccupied() && patrols < POPULATION.PATROLS) this.spawnAtEdge("patrol");
     if (traders < POPULATION.TRADERS) this.spawnAtEdge("trader");
@@ -2946,6 +2985,13 @@ export class Game {
     };
     // closed-circulation audit (Этап 5a): delta must be 0 — the balance autotest asserts it
     (window as unknown as Record<string, unknown>).__econAudit = () => this.econAudit();
+    // clan economy probe (Этап 5c): fund thickness and the pirate strength it can staff;
+    // setFund is a non-conserving debug setter for live checks (respects the debt cap)
+    (window as unknown as Record<string, unknown>).__pirateEcon = () => ({
+      fund: this.pools.clan,
+      strength: this.pirateStrength(),
+      setFund: (v: number) => { this.pools.clan = Math.max(-PIRATE_ECON.DEBT_LIMIT, Math.min(MONEY_TOTAL, v)); },
+    });
     window.__gameProbe = () => {
       const p = this.ships[0];
       // contract with scripts/verify-game.mjs: W (up-screen, +y world) must decrease probe z
