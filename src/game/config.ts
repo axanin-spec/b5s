@@ -18,6 +18,10 @@ export const QUALITY = {
   PARTICLES_LOW: 220,
   /** Auto-degrade when the frame rate stays below this for 2s. */
   DEGRADE_FPS: 45,
+  /** Two consecutive windows below this → also drop nebulas/dust layers (tier 2), not just supersample. */
+  HEAVY_FPS: 32,
+  /** Windows at/above this fps let quality climb back (8 windows ≈ 16s). */
+  RECOVER_FPS: 55,
 } as const;
 
 export const COLORS = {

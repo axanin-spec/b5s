@@ -13,6 +13,7 @@ import {
 import { AudioSystem } from "./audio";
 import { GameLoop } from "./engine";
 import { Input } from "./input";
+import { perf } from "./perf";
 import { GameStateMachine } from "./state";
 import {
   makeCargoTexture, makeCreditTexture, makeGateFrameTexture, makeGateHorizonTexture, makeGlowTexture, makeNebulaTexture,
@@ -142,6 +143,14 @@ export class Game {
   private lowParticles = false;
   private fpsAccum = 0;
   private fpsWindowStart = 0;
+  /**
+   * Adaptive pixel quality (Этап 4): 0 = full (2× supersample, all layers),
+   * 1 = supersample off (¼ pixels), 2 = also drop nebulas + near dust. Driven by the
+   * fps monitor with hysteresis; JS render is ~0.2ms, so fill-rate is the real lever.
+   */
+  private quality = 0;
+  private badWindows = 0;
+  private goodWindows = 0;
 
   /* player */
   private player: PlayerState = Game.freshPlayerState();
@@ -248,7 +257,7 @@ export class Game {
     this.enterSystem(SYSTEMS[0].id);
 
     this.loop = new GameLoop({
-      update: (dt) => this.update(dt),
+      update: (dt) => { perf.beginUpdate(); this.update(dt); perf.endUpdate(); },
       render: () => this.render(),
     });
     this.loop.start();
@@ -262,6 +271,12 @@ export class Game {
   }
 
   private onResizeBound = () => this.onResize();
+
+  /** switch adaptive pixel quality tier (see this.quality); rebuilds the canvas backing store */
+  private setQuality(q: number): void {
+    this.quality = q;
+    this.onResize();
+  }
 
   /* ================================================================== */
   /* Background                                                          */
@@ -417,8 +432,9 @@ export class Game {
     const w = window.innerWidth, h = window.innerHeight;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     // 2× supersampling up to ~2.6M css px: draw twice the resolution, let the compositor
-    // downscale — texture edges and small text stay crisp (on 4K we skip to keep fill-rate sane)
-    const ss = w * h <= 2_600_000 ? 2 : 1;
+    // downscale — texture edges and small text stay crisp (on 4K we skip to keep fill-rate sane);
+    // quality tier 1+ drops it entirely when the fps monitor sees a struggling machine
+    const ss = this.quality === 0 && w * h <= 2_600_000 ? 2 : 1;
     this.canvas.width = Math.round(w * dpr * ss);
     this.canvas.height = Math.round(h * dpr * ss);
     this.canvas.style.width = `${w}px`;
@@ -2005,12 +2021,24 @@ export class Game {
   private sy(wy: number): number { return (this.camSy - wy) * this.ppu + window.innerHeight / 2; }
 
   private render(): void {
-    // auto quality degrade: sustained low fps → halve particle emission
+    // auto quality: sustained low fps → cheaper particles, then supersample, then layers.
+    // hysteresis: 2 bad windows (4s) to step down, 8 good (16s) to step back up
     this.fpsAccum += 1;
     const now = performance.now();
     if (now - this.fpsWindowStart > 2000) {
       const fps = (this.fpsAccum * 1000) / Math.max(1, now - this.fpsWindowStart);
-      this.lowParticles = fps < QUALITY.DEGRADE_FPS;
+      this.lowParticles = fps < QUALITY.DEGRADE_FPS || this.quality >= 1;
+      if (fps < QUALITY.DEGRADE_FPS) { this.badWindows++; this.goodWindows = 0; }
+      else if (fps >= QUALITY.RECOVER_FPS) { this.goodWindows++; this.badWindows = 0; }
+      else { this.badWindows = 0; this.goodWindows = 0; }
+      if (this.badWindows >= 2 && this.quality < 2) {
+        const want = fps < QUALITY.HEAVY_FPS ? 2 : 1;
+        if (want > this.quality) this.setQuality(want);
+        this.badWindows = 0;
+      } else if (this.goodWindows >= 8 && this.quality > 0) {
+        this.setQuality(this.quality - 1);
+        this.goodWindows = 0;
+      }
       this.fpsAccum = 0;
       this.fpsWindowStart = now;
     }
@@ -2052,9 +2080,12 @@ export class Game {
     })());
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, W, H);
+    perf.begin();
 
-    /* parallax layers: effective world pos = s - cam * f */
+    /* parallax layers: effective world pos = s - cam * f;
+       tier 2 drops the nebula (f .3) and near-dust (f .7) layers — the two biggest blits */
     for (const layer of this.layers) {
+      if (this.quality >= 2 && layer.f >= 0.3) continue;
       const ox = this.camSx * layer.f, oy = this.camSy * layer.f;
       for (const star of layer.stars) {
         const x = (star.x - ox) * this.ppu + W / 2;
@@ -2082,6 +2113,8 @@ export class Game {
         ctx.globalAlpha = 1;
       }
     }
+
+    perf.mark("parallax");
 
     /* orbit rings */
     ctx.lineWidth = 1;
@@ -2168,6 +2201,8 @@ export class Game {
       }
     }
 
+    perf.mark("bodies");
+
     /* pickups */
     const t = now * 0.001;
     for (const pk of this.pickups) {
@@ -2214,6 +2249,8 @@ export class Game {
       ctx.drawImage(b.friendly ? this.boltTexPlayer : this.boltTexEnemy, x - size / 2, y - size / 2, size, size);
     }
 
+    perf.mark("entities");
+
     /* particles */
     ctx.globalCompositeOperation = "lighter";
     const pal = paletteTex();
@@ -2246,6 +2283,7 @@ export class Game {
     }
     ctx.globalCompositeOperation = "source-over";
     ctx.globalAlpha = 1;
+    perf.mark("fx");
 
     /* plotted course: diamond over the target, or a compass arrow pinned to the screen edge */
     if (this.waypoint && st === "playing") {
@@ -2326,6 +2364,7 @@ export class Game {
       ctx.restore();
     }
 
+    perf.end();
     window.__GAME_READY__ = true;
     if (!this.splashRemoved) {
       this.splashRemoved = true;
@@ -2591,6 +2630,30 @@ export class Game {
     // module instances are otherwise unreachable from an injected script's module map
     (window as unknown as Record<string, unknown>).__gameApi = gameApi;
     (window as unknown as Record<string, unknown>).__uiBridge = uiBridge;
+    // section profiler for perf work (Этап 4): enable → read rolling per-frame ms report
+    const self = this;
+    (window as unknown as Record<string, unknown>).__perf = {
+      enable: () => { perf.enabled = true; },
+      disable: () => { perf.enabled = false; },
+      /** spawn n pirates around the player to build a heavy combat scene */
+      stress: (n = 12) => {
+        const p = this.ships[0];
+        for (let i = 0; i < n; i++) {
+          const a = (i / n) * Math.PI * 2;
+          this.spawnShip("pirate", p.x + Math.cos(a) * 900, p.y + Math.sin(a) * 900);
+        }
+      },
+      /** one big explosion + shockwave near the player — worst-case fx frame */
+      blast: () => {
+        const p = this.ships[0];
+        this.explosion(p.x + 300, p.y, 80, 460, 0);
+        this.shockwave(p.x + 300, p.y, true);
+      },
+      get report() { return perf.report; },
+      get fps() { return perf.fps; },
+      get quality() { return self.quality; },
+      setQuality: (q: number) => self.setQuality(Math.max(0, Math.min(2, q))),
+    };
     window.__gameProbe = () => {
       const p = this.ships[0];
       // contract with scripts/verify-game.mjs: W (up-screen, +y world) must decrease probe z
