@@ -52,11 +52,14 @@ function blankShip(): Ship {
  * Can a bolt fired by `from` damage `target`? Traders never shoot; player may hit anyone.
  * `outlaw` is the patrol-hostility flag: the player shot civilians or their patrol
  * standing dropped to vendetta (REP.HOSTILE_PATROL).
+ * `piratePact` (5f): to a wanted captain the raiders are kin — a pirate bolt never
+ * touches the player, stray or aimed. The occupation flagship keeps its guns warm.
  */
-export function canHit(from: Faction, target: Faction, outlaw: boolean): boolean {
+export function canHit(from: Faction, target: Faction, outlaw: boolean, piratePact = false): boolean {
   switch (from) {
     case "player": return target !== "player";
     case "pirate":
+      return target === "patrol" || target === "trader" || (target === "player" && !piratePact);
     case "boss": return target === "player" || target === "patrol" || target === "trader";
     case "patrol": return target === "pirate" || target === "boss" || (target === "player" && outlaw);
     default: return false;
@@ -145,6 +148,8 @@ export class Game {
   /** Kill/event feed lines for the HUD column (game feel); they age out with the player clock. */
   private feed: { id: number; text: string; cls: "info" | "gold" | "bad"; t: number }[] = [];
   private feedId = 1;
+  /** Last announced pirate status (5f) — flips re-flag the newscast exactly once. */
+  private pirateStatus = false;
   /** Hyperspace jump overlay, 0..1, decays inside updateParticles. */
   private warpFx = 0;
   /** Damaged-hull smoke timer. */
@@ -809,6 +814,7 @@ export class Game {
       this.player.outlaw = true;
       this.setNews("Вы объявлены ВНЕ ЗАКОНА: патруль открывает огонь без предупреждения!");
       this.audio.sfx("alarm");
+      this.syncPirateStatus(); // 5f: the clans gain a kin captain out of this
     }
     if (byPlayer && (s.faction === "pirate" || s.faction === "boss")) {
       // retaliate
@@ -842,6 +848,8 @@ export class Game {
       // Pirate bounties come out of the patrol treasury (5c): an empty treasury makes
       // them "deflate" — gain() pays what little it has left. The flagship's ransom
       // is still clan money: the coffers of the occupation, captured with the wreck.
+      // A downed patrol's bounty (5f) drains that same treasury — pursuers pay for
+      // their own wreckage once a wanted captain scrapes it off the hull.
       const src: PoolId = s.faction === "boss" ? "clan" : "patrol";
       this.spawnPickup("credits", "", amount, s.x, s.y, src);
     }
@@ -883,6 +891,7 @@ export class Game {
             this.player.pardons = 0;
             // the atonement program wipes the slate: vendetta is forgiven along with the flag
             if (this.player.rep.patrol <= REP.HOSTILE_PATROL) this.player.rep.patrol = REP.HOSTILE_PATROL + 1;
+            this.syncPirateStatus(); // 5f: kin status lifts with the warrant
             this.setNews(`Патруль снял розыск: ${REP.PARDON_KILLS} голов пиратов зачтены как искупление`);
             this.audio.sfx("pickup");
           }
@@ -1113,6 +1122,7 @@ export class Game {
   newGame(): void {
     this.clearEntities();
     this.player = Game.freshPlayerState();
+    this.pirateStatus = false; // 5f: a fresh name is clean paper
     this.occ = { systemId: OCCUPATION.START_SYSTEM, held: true, t: OCCUPATION.FLAGSHIP_BUILD, flagshipBuilt: false };
     this.pools = { ...POOLS };
     this.waypoint = null;
@@ -1145,6 +1155,7 @@ export class Game {
     this.player.outlaw = save.player.outlaw;
     this.player.pardons = save.player.pardons;
     this.player.rep = { ...save.player.rep };
+    this.pirateStatus = this.patrolHostile(); // 5f: resync silently — no re-flag on load
     this.player.kills = save.stats.kills;
     this.player.earned = save.stats.earned;
     this.player.traded = save.stats.traded;
@@ -1353,6 +1364,13 @@ export class Game {
       this.setNews("Эмбарго: система под вашим налётом — доки закрыты, терминалы молчат. Работайте трюмом у складов.");
       return;
     }
+    // pirate status (5f): law-abiding worlds don't board a wanted captain; the clans'
+    // black market in the occupied system is the only terminal that takes you
+    if (this.isPirate() && !this.hereOccupied()) {
+      this.audio.sfx("alarm");
+      this.setNews("Вас не принимают: вы в розыске. Живой товар — на чёрном рынке оккупированной системы.");
+      return;
+    }
     this.sm.transition("docked");
     this.audio.sfx("dock");
     this.audio.setThreat(0);
@@ -1469,10 +1487,42 @@ export class Game {
     return this.player.outlaw || this.player.rep.patrol <= REP.HOSTILE_PATROL;
   }
 
+  /**
+   * 5f «pirate status»: a wanted captain counts as one of the clans. Raiders hold
+   * their fire, radars repaint (raiders blue, patrol red), ordinary stations and
+   * planets refuse the terminal — only the occupied system's black market is open.
+   */
+  private isPirate(): boolean {
+    return this.patrolHostile();
+  }
+
+  /** One-shot newscast when pirate status flips — called after any rep/outlaw change. */
+  private syncPirateStatus(): void {
+    const now = this.patrolHostile();
+    if (now === this.pirateStatus) return;
+    this.pirateStatus = now;
+    if (now) {
+      this.audio.sfx("alarm");
+      this.setNews("☠ Вы теперь свой для пиратов: рейдеры вас не тронут. Но патруль стреляет при виде, и станции вас не принимают.");
+    } else {
+      this.audio.sfx("pickup");
+      this.setNews("Розыск выдохся: станции снова берут вас, вот и рейдерам снова есть с чего вас вешать.");
+    }
+  }
+
+  /** Radar/blip color; pirate status swaps the palette — raiders go blue, patrol red. */
+  private blipColor(f: Faction): string {
+    const ally = this.isPirate();
+    if (f === "pirate") return ally ? "#5a9fff" : "#ff5a4a";
+    if (f === "patrol") return ally ? "#ff5a4a" : "#5a9fff";
+    return f === "boss" ? "#d26aff" : "#ffd24a";
+  }
+
   private addRep(d: { patrol?: number; trader?: number }): void {
     const r = this.player.rep;
     if (d.patrol) r.patrol = Math.max(REP.MIN, Math.min(REP.MAX, r.patrol + d.patrol));
     if (d.trader) r.trader = Math.max(REP.MIN, Math.min(REP.MAX, r.trader + d.trader));
+    this.syncPirateStatus();
   }
 
   /** Patrol tribunal tariff: deeper debt to the law — fatter the fine. */
@@ -1502,6 +1552,7 @@ export class Game {
     this.player.outlaw = false;
     this.player.pardons = 0;
     this.audio.sfx("trade");
+    this.syncPirateStatus(); // 5f: receipt in hand, the clans lose their guest
     this.setNews(`Штраф ₡${cost.toLocaleString("ru-RU")} уплачен — розыск снят, патруль больше не считает вас врагом.`);
     this.saveNow();
     this.pushStation();
@@ -2144,6 +2195,7 @@ export class Game {
       this.addRep(RAID.REP_HIT);
       this.player.outlaw = true; // open piracy: patrol shoots on sight until pardoned or fined
       this.audio.sfx("alarm");
+      this.syncPirateStatus(); // 5f: the first grab makes you formal kin of the clans
       this.setNews(`⚔ Склад ${d.name} опустошен: +₡${total.toLocaleString("ru-RU")}. Патруль объявил вас пиратом — с этого момента вас ищут!`);
     } else {
       this.audio.sfx("credits");
@@ -2337,7 +2389,7 @@ export class Game {
         if (t.active) {
           const td = Math.hypot(t.x - s.x, t.y - s.y);
           const range = s.faction === "boss" ? 1100 : 760;
-          if (td < range && canHit(s.faction, t.faction, this.patrolHostile())) {
+          if (td < range && canHit(s.faction, t.faction, this.patrolHostile(), this.isPirate())) {
             // lead the target (AI polish): two intercept passes to where it will be at bolt arrival
             const boltSpd = BOLT_CFG.SPEED * 0.82;
             let tt = td / boltSpd;
@@ -2494,9 +2546,10 @@ export class Game {
     }
     if (s.ai === AiState.Flee) return;
 
-    // pick target: player in range, else nearest trader, else wander
+    // pick target: player in range — but never a wanted kin captain (5f: the clans
+    // recognise one of their own), else nearest trader, else wander
     let best = -1, bestD: number = FACTION_CFG.pirate.aggro;
-    if (p.active) {
+    if (p.active && !this.isPirate()) {
       const d = Math.hypot(p.x - s.x, p.y - s.y);
       const playerHeat = this.player.kills >= 3 ? 1.5 : 1; // notorious rangers attract pirates
       if (d < bestD * playerHeat) { best = 0; bestD = d; }
@@ -2539,6 +2592,7 @@ export class Game {
 
   private updateBolts(dt: number): void {
     const outlaw = this.patrolHostile();
+    const pact = this.isPirate();
     for (const b of this.bolts) {
       if (!b.active) continue;
       b.life -= dt;
@@ -2550,7 +2604,7 @@ export class Game {
       for (let i = 0; i < MAX_SHIPS; i++) {
         const s = this.ships[i];
         if (!s.active) continue;
-        if (!canHit(b.from, s.faction, outlaw)) continue;
+        if (!canHit(b.from, s.faction, outlaw, pact)) continue;
         const rr = s.radius + BOLT_CFG.RADIUS;
         if (Math.abs(s.x - b.x) > rr || Math.abs(s.y - b.y) > rr) continue;
         if (Math.hypot(s.x - b.x, s.y - b.y) > rr) continue;
@@ -2845,6 +2899,16 @@ export class Game {
         ctx.beginPath();
         ctx.arc(x, y, s.radius * this.ppu + 6, 0, Math.PI * 2);
         ctx.stroke();
+      }
+      // pirate status (5f): dashed kin rings — blue around the raiders, hostile red around patrol
+      if (i !== 0 && this.isPirate() && (s.faction === "pirate" || s.faction === "patrol")) {
+        ctx.strokeStyle = s.faction === "pirate" ? "rgba(90,159,255,0.45)" : "rgba(255,90,74,0.45)";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([7, 7]);
+        ctx.beginPath();
+        ctx.arc(x, y, s.radius * this.ppu + 10, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
       }
     }
 
@@ -3171,8 +3235,7 @@ export class Game {
     for (let i = 1; i < MAX_SHIPS; i++) {
       const s = this.ships[i];
       if (!s.active) continue;
-      const c = s.faction === "pirate" ? "#ff5a4a" : s.faction === "boss" ? "#d26aff" : s.faction === "patrol" ? "#5a9fff" : "#ffd24a";
-      map.ships.push({ x: s.x / HALF, y: s.y / HALF, c });
+      map.ships.push({ x: s.x / HALF, y: s.y / HALF, c: this.blipColor(s.faction) });
     }
     const p = this.ships[0];
     map.player = { x: p.x / HALF, y: p.y / HALF, a: p.angle };
@@ -3349,11 +3412,36 @@ export class Game {
         };
       },
       get playing() { return self.sm.state === "playing"; },
+      get docked() { return self.sm.state === "docked"; },
+      // who is locked on the player, by side (5f pact checks)
+      pirateHunt: () => self.ships.filter((s) => s.active && (s.faction === "pirate" || s.faction === "boss") && s.targetIdx === 0).length,
+      patrolHunt: () => self.ships.filter((s) => s.active && s.faction === "patrol" && s.targetIdx === 0).length,
+      // kill the first ship of a faction by player hands and park the player on the wreck
+      kill: (f: string) => {
+        const i = self.ships.findIndex((s, j) => j > 0 && s.active && s.faction === f);
+        if (i < 0) return null;
+        const at = { x: self.ships[i].x, y: self.ships[i].y };
+        self.killShip(i, true);
+        const p = self.ships[0];
+        p.x = at.x; p.y = at.y; p.vx = 0; p.vy = 0;
+        return at;
+      },
       // game-feel layer probes: popup/feed counts, a popup at the player, a hull setter for the vignette
       feel: {
         state: () => ({ floaters: this.floaters.length, feed: this.feedView().length }),
         poke: () => { const p = this.ships[0]; this.floater(p.x, p.y, "+₡1234", "#ffd24a"); },
         hull: (v: number) => { const p = this.ships[0]; p.hp = v; },
+      },
+      // pirate status (5f): read it, or force it on/off without grinding rep by hand
+      pirate: () => this.isPirate(),
+      wanted: (on: boolean) => {
+        if (on) this.player.rep.patrol = Math.min(this.player.rep.patrol, REP.HOSTILE_PATROL);
+        else {
+          this.player.outlaw = false;
+          this.player.rep.patrol = Math.max(this.player.rep.patrol, REP.HOSTILE_PATROL + 1);
+        }
+        this.syncPirateStatus();
+        return this.isPirate();
       },
     };
     window.__gameProbe = () => {
@@ -3381,8 +3469,7 @@ export class Game {
       const s = this.ships[i];
       if (!s.active) continue;
       if (i === 0) { out.push({ x: s.x / HALF, y: s.y / HALF, c: "#ffffff", s: 4 }); continue; }
-      const c = s.faction === "pirate" ? "#ff5a4a" : s.faction === "boss" ? "#d26aff" : s.faction === "patrol" ? "#5a9fff" : "#ffd24a";
-      out.push({ x: s.x / HALF, y: s.y / HALF, c, s: s.faction === "boss" ? 4 : 2 });
+      out.push({ x: s.x / HALF, y: s.y / HALF, c: this.blipColor(s.faction), s: s.faction === "boss" ? 4 : 2 });
     }
     // plotted course ring under the objective marker
     if (this.waypoint) out.push({ x: this.waypoint.x / HALF, y: this.waypoint.y / HALF, c: "#54ffd2", s: 7, w: 1 });

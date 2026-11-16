@@ -68,7 +68,8 @@ export const PLAYER_CFG = {
 
 export const FACTION_CFG = {
   pirate: { radius: 30, hp: 55, shield: 20, accel: 300, maxSpeed: 390, dmg: 7, fireRate: 1.1, aggro: 2600, bounty: [220, 520] },
-  patrol: { radius: 32, hp: 90, shield: 45, accel: 320, maxSpeed: 410, dmg: 9, fireRate: 1.4, aggro: 3200, bounty: [0, 0] },
+  // patrol bounty (5f): a shot-down cruiser spills its own treasury — wanted captains loot the pursuers
+  patrol: { radius: 32, hp: 90, shield: 45, accel: 320, maxSpeed: 410, dmg: 9, fireRate: 1.4, aggro: 3200, bounty: [180, 460] },
   trader: { radius: 34, hp: 70, shield: 25, accel: 220, maxSpeed: 300, dmg: 0, fireRate: 0, aggro: 0, bounty: [300, 800] },
   boss:   { radius: 95, hp: 1600, shield: 700, accel: 190, maxSpeed: 250, dmg: 16, fireRate: 0.9, aggro: 99999, bounty: [25000, 25000] },
 } as const;

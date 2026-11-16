@@ -147,8 +147,8 @@ export function Hud({ snap, isTouch }: { snap: Snapshot; isTouch: boolean }) {
         {hud.wanted && (
           <div className="hud-outlaw">
             {hud.outlaw
-              ? `⚠ РОЗЫСК — патруль стреляет · искупление ${hud.pardons}/${REP.PARDON_KILLS} пиратов`
-              : `☠ ВРАЖДА с патрулём — стреляет при виде вас · искупление ${hud.pardons}/${REP.PARDON_KILLS} пиратов`}
+              ? `⚠ РОЗЫСК — патруль стреляет · рейдеры не трогают · станции не берут · искупление ${hud.pardons}/${REP.PARDON_KILLS} пиратов`
+              : `☠ ВРАЖДА с патрулём — стреляет при виде вас · рейдеры не трогают · станции не берут · искупление ${hud.pardons}/${REP.PARDON_KILLS} пиратов`}
           </div>
         )}
         {hud.contractLine && <div className="hud-contract">◈ {hud.contractLine}</div>}
