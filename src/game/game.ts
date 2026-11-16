@@ -3216,6 +3216,30 @@ export class Game {
         return { x: p.x, y: p.y, dock: d.id };
       },
     };
+    // time-warp for the economy balance autotest (Этап 5e): run fixed steps headlessly
+    // without waiting for rAF. god() makes the idle test player unbreakable (it never
+    // fires or trades, so it stays money-neutral); hide() parks it in a far corner so
+    // the fleet simulates its own business. step() returns the audit at each checkpoint.
+    (window as unknown as Record<string, unknown>).__sim = {
+      step: (n: number) => {
+        const st = GameLoop.STEP;
+        const steps = Math.max(0, Math.min(5000, Math.floor(n)));
+        for (let i = 0; i < steps; i++) this.update(st);
+        return this.econAudit();
+      },
+      god: () => {
+        const p = this.ships[0];
+        p.hp = 1e9; p.maxHp = 1e9; p.shield = 1e6; p.maxShield = 1e6;
+      },
+      hide: () => {
+        const p = this.ships[0];
+        p.x = -WORLD_CFG.HALF * 0.92; p.y = -WORLD_CFG.HALF * 0.92;
+        p.vx = 0; p.vy = 0;
+        self.camX = p.x; self.camY = p.y;
+      },
+      count: (faction: string) => this.ships.filter((s) => s.active && s.faction === faction).length,
+      get playing() { return self.sm.state === "playing"; },
+    };
     window.__gameProbe = () => {
       const p = this.ships[0];
       // contract with scripts/verify-game.mjs: W (up-screen, +y world) must decrease probe z
