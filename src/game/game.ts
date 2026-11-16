@@ -97,6 +97,9 @@ interface ParallaxLayer {
   nebulas: { tex: CanvasImageSource; x: number; y: number; scale: number; additive?: boolean }[];
 }
 
+/** How long a kill-feed line stays on the HUD, in play-seconds (game feel). */
+const FEED_TTL = 12;
+
 export class Game {
   private ctx: CanvasRenderingContext2D;
   private loop: GameLoop;
@@ -137,6 +140,11 @@ export class Game {
   /** Expanding shockwave rings spawned by explosions (stroked additively in screen space). */
   private rings: { life: number; maxLife: number; x: number; y: number; r: number; vr: number; hot: boolean }[] = [];
   private ringCursor = 0;
+  /** Rising credit popups over the world (game feel): spawned on income/spend, drawn in screen space. */
+  private floaters: { x: number; y: number; t: number; ttl: number; text: string; c: string; big: boolean }[] = [];
+  /** Kill/event feed lines for the HUD column (game feel); they age out with the player clock. */
+  private feed: { id: number; text: string; cls: "info" | "gold" | "bad"; t: number }[] = [];
+  private feedId = 1;
   /** Hyperspace jump overlay, 0..1, decays inside updateParticles. */
   private warpFx = 0;
   /** Damaged-hull smoke timer. */
@@ -678,6 +686,7 @@ export class Game {
     if (s.cargo[goodId] <= 0) delete s.cargo[goodId];
     this.player.cargo[goodId] = (this.player.cargo[goodId] ?? 0) + n;
     this.player.traded += 1;
+    this.floater(s.x, s.y, `−₡${n * unit}`, "#9fb6c6");
     this.audio.sfx("trade");
     this.pushHud();
     return true;
@@ -703,6 +712,7 @@ export class Game {
     if (this.player.cargo[goodId] <= 0) delete this.player.cargo[goodId];
     s.cargo[goodId] = (s.cargo[goodId] ?? 0) + n;
     this.player.traded += 1;
+    this.floater(s.x, s.y, `+₡${n * unit}`, "#ffd24a");
     this.audio.sfx("trade");
     this.pushHud();
     return true;
@@ -1072,6 +1082,9 @@ export class Game {
     this.offers = [];
     this.convoy = null;
     this.convoyT = CONVOY.FIRST_DELAY;
+    // transient feedback layers don't ride across a world rebuild either
+    this.floaters = [];
+    this.feed = [];
   }
 
   private spawnInitialPopulation(): void {
@@ -1305,8 +1318,27 @@ export class Game {
   }
 
   private setNews(text: string): void {
-    uiBridge.set({ news: text });
+    this.pushFeed(text);
+    uiBridge.set({ news: text, feed: this.feedView() });
     this.newsT = 14;
+  }
+
+  /** Feed color (game feel): loot and kills gold, losses and warnings red, everything else info. */
+  private feedCls(text: string): "info" | "gold" | "bad" {
+    if (/☠|⚔|⚑|ПЕРЕХВАТ|опустошен|трофе/i.test(text)) return "gold";
+    if (/потерян|ЗАХВАТИЛИ|провал|объявлен|эмбарго|не хватает|нечего|уничтожен/i.test(text)) return "bad";
+    return "info";
+  }
+
+  private pushFeed(text: string): void {
+    this.feed.push({ id: this.feedId++, text, cls: this.feedCls(text), t: this.player.playTime });
+    while (this.feed.length > 6) this.feed.shift();
+  }
+
+  /** The live slice of the feed — stale lines drop off as the player clock passes FEED_TTL. */
+  private feedView(): { id: number; text: string; cls: "info" | "gold" | "bad" }[] {
+    const t = this.player.playTime;
+    return this.feed.filter((f) => t - f.t < FEED_TTL).map(({ id, text, cls }) => ({ id, text, cls }));
   }
 
   /* ================================================================== */
@@ -1925,6 +1957,9 @@ export class Game {
     /* ---- pickups ---- */
     this.updatePickups(dt);
 
+    /* ---- floating credit popups ---- */
+    this.updateFloaters(dt);
+
     /* ---- spawner ---- */
     this.spawnT -= dt;
     if (this.spawnT <= 0) {
@@ -2112,6 +2147,7 @@ export class Game {
       this.audio.sfx("credits");
       this.setNews(`⚔ Склад ${d.name} опустошен: +₡${total.toLocaleString("ru-RU")}.`);
     }
+    this.floater(d.x, d.y - d.radius - 40, `+₡${Math.round(total).toLocaleString("ru-RU")}`, "#ff9a3c", true);
     this.pushHud();
     this.saveNow();
   }
@@ -2515,6 +2551,7 @@ export class Game {
           const paid = this.gain(pk.amount, pk.src);
           this.player.earned += paid;
           this.audio.sfx("credits");
+          if (paid > 0) this.floater(pk.x, pk.y, `+₡${Math.round(paid)}`, "#ffd24a");
           pk.active = false;
         } else if (this.cargoUsed() < this.cargoMax()) {
           this.player.cargo[pk.goodId] = (this.player.cargo[pk.goodId] ?? 0) + pk.amount;
@@ -2523,6 +2560,18 @@ export class Game {
         } // else: hold full — leave the pod floating
       }
     }
+  }
+
+  /** Spawn a rising text popup at world coords (game feel) — capped so a haul can't flood the screen. */
+  private floater(x: number, y: number, text: string, c: string, big = false): void {
+    if (this.floaters.length >= 40) this.floaters.shift();
+    this.floaters.push({ x, y, t: 0, ttl: big ? 2.4 : 1.5, text, c, big });
+  }
+
+  private updateFloaters(dt: number): void {
+    if (!this.floaters.length) return;
+    for (const f of this.floaters) f.t += dt;
+    this.floaters = this.floaters.filter((f) => f.t < f.ttl);
   }
 
   /* ================================================================== */
@@ -2865,6 +2914,24 @@ export class Game {
       ctx.stroke();
     }
 
+    /* floating credit popups (game feel): rise and fade in screen space */
+    if (this.floaters.length && st === "playing") {
+      ctx.save();
+      ctx.textAlign = "center";
+      for (const f of this.floaters) {
+        const k = f.t / f.ttl;
+        ctx.globalAlpha = k < 0.6 ? 1 : Math.max(0, 1 - (k - 0.6) / 0.4);
+        ctx.font = `${f.big ? 800 : 700} ${Math.round((f.big ? 17 : 13) * this.ppu)}px ui-monospace, Consolas, monospace`;
+        const fx = this.sx(f.x), fy = this.sy(f.y) - k * 46 * this.ppu;
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = "rgba(2,6,14,0.9)";
+        ctx.strokeText(f.text, fx, fy);
+        ctx.fillStyle = f.c;
+        ctx.fillText(f.text, fx, fy);
+      }
+      ctx.restore();
+    }
+
     /* hyperspace arrival: radial cyan flash + receding speed streaks */
     if (this.warpFx > 0) {
       const k = this.warpFx;
@@ -2945,7 +3012,7 @@ export class Game {
         : 0,
     };
     // radio offer refreshed with the HUD — a caravan in range appears on the band live
-    uiBridge.set({ hud, radio: this.radioData() });
+    uiBridge.set({ hud, radio: this.radioData(), feed: this.feedView() });
   }
 
   private pushStation(): void {
@@ -3239,6 +3306,12 @@ export class Game {
       },
       count: (faction: string) => this.ships.filter((s) => s.active && s.faction === faction).length,
       get playing() { return self.sm.state === "playing"; },
+      // game-feel layer probes: popup/feed counts, a popup at the player, a hull setter for the vignette
+      feel: {
+        state: () => ({ floaters: this.floaters.length, feed: this.feedView().length }),
+        poke: () => { const p = this.ships[0]; this.floater(p.x, p.y, "+₡1234", "#ffd24a"); },
+        hull: (v: number) => { const p = this.ships[0]; p.hp = v; },
+      },
     };
     window.__gameProbe = () => {
       const p = this.ships[0];

@@ -128,6 +128,13 @@ export interface EndStats {
   playTime: number;
 }
 
+/** One kill/event feed line (game feel); the game ages lines out after FEED_TTL. */
+export interface FeedItem {
+  id: number;
+  text: string;
+  cls: "info" | "gold" | "bad";
+}
+
 export interface Snapshot {
   screen: GameState;
   hasSave: boolean;
@@ -138,6 +145,8 @@ export interface Snapshot {
   /** Bumped on every hull hit — drives the red flash animation. */
   damageFlash: number;
   news: string | null;
+  /** Rolling kill/event feed (game feel) — the last few news lines with age-out, newest last. */
+  feed: FeedItem[];
   /** Star chart overlay (M) — the game keeps running behind it. */
   mapOpen: boolean;
   map: MapSnapshot | null;
@@ -154,6 +163,7 @@ const INITIAL: Snapshot = {
   end: null,
   damageFlash: 0,
   news: null,
+  feed: [],
   mapOpen: false,
   map: null,
   radio: null,

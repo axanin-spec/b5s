@@ -160,6 +160,15 @@ export function Hud({ snap, isTouch }: { snap: Snapshot; isTouch: boolean }) {
         )}
       </div>
 
+      {/* kill/event feed (game feel): left column, lines age out on the game side */}
+      {snap.feed.length > 0 && (
+        <div className="hud-feed">
+          {snap.feed.map((f) => (
+            <div key={f.id} className={`feed-item ${f.cls}`}>{f.text}</div>
+          ))}
+        </div>
+      )}
+
       {/* top-right: minimap + buttons */}
       <div className="hud-topright">
         <Minimap />
@@ -171,6 +180,11 @@ export function Hud({ snap, isTouch }: { snap: Snapshot; isTouch: boolean }) {
           </button>
         </div>
       </div>
+
+      {/* hull-critical vignette (game feel): a red pulse that deepens below 30% hull */}
+      {hullPct < 30 && (
+        <div className="hud-vignette" style={{ opacity: 0.15 + 0.85 * (30 - hullPct) / 30 }} />
+      )}
 
       {/* boss bar */}
       {hud.bossActive && (

@@ -451,6 +451,36 @@ kbd {
   to { opacity: 1; transform: translateX(-50%); }
 }
 
+/* килл-фид (game feel): колонка событий слева, строки устаревают на стороне игры */
+.hud-feed {
+  position: absolute; left: max(12px, env(safe-area-inset-left)); top: 50%;
+  transform: translateY(-50%); width: 330px; max-width: 40vw;
+  display: flex; flex-direction: column; gap: 6px;
+  pointer-events: none; z-index: 4;
+}
+.feed-item {
+  font: 600 11px/1.4 ui-monospace, "Cascadia Mono", Consolas, monospace;
+  color: #bfe9ff; background: rgba(4, 14, 26, 0.55);
+  border-left: 2px solid rgba(84, 255, 210, 0.5); padding: 5px 8px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  animation: feed-in 0.25s ease-out;
+}
+.feed-item.gold { color: #ffd98a; border-left-color: var(--gold); }
+.feed-item.bad { color: #ff9d94; border-left-color: var(--danger); }
+@keyframes feed-in { from { opacity: 0; transform: translateX(-14px); } to { opacity: 1; transform: none; } }
+
+/* виньетка критического корпуса (game feel): красный пульс под 30% прочности */
+.hud-vignette {
+  position: fixed; inset: 0; pointer-events: none; z-index: 4;
+  background: radial-gradient(ellipse at center, transparent 52%, rgba(255, 38, 28, 0.5) 100%);
+  animation: vignette-pulse 1.15s ease-in-out infinite alternate;
+}
+@keyframes vignette-pulse {
+  from { filter: brightness(0.6); }
+  to { filter: brightness(1.15); }
+}
+
 /* damage flash */
 .damage-flash {
   position: absolute;
