@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='%2354ffd2'/></svg>" />
+    <title>Космический Рейнджер</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <div id="boot-splash">
+      <div class="splash-inner">
+        <div class="splash-logo">КОСМИЧЕСКИЙ РЕЙНДЖЕР</div>
+        <div class="splash-spinner"></div>
+        <div class="splash-hint">Загрузка звёздной системы…</div>
+      </div>
+    </div>
+    <style>
+      #boot-splash {
+        position: fixed; inset: 0; z-index: 50;
+        display: flex; align-items: center; justify-content: center;
+        background: radial-gradient(ellipse at 50% 40%, #0a1a2c 0%, #04060d 70%);
+        font-family: ui-sans-serif, system-ui, sans-serif;
+      }
+      .splash-inner { text-align: center; }
+      .splash-logo {
+        color: #eafff8; font-size: clamp(20px, 5vw, 34px); font-weight: 700;
+        letter-spacing: 0.14em;
+        text-shadow: 0 0 24px rgba(84, 255, 210, 0.45);
+      }
+      .splash-spinner {
+        width: 42px; height: 42px; margin: 26px auto 14px;
+        border: 3px solid rgba(84, 255, 210, 0.15);
+        border-top-color: #54ffd2;
+        border-radius: 50%;
+        animation: splashSpin 0.9s linear infinite;
+      }
+      .splash-hint { color: #7e97a4; font-size: 13px; letter-spacing: 0.06em; }
+      @keyframes splashSpin { to { transform: rotate(360deg); } }
+    </style>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
