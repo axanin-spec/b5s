@@ -1,6 +1,9 @@
+import { useState } from 'react'
 import { gameApi } from '@/game/uiBridge'
+import { SettingsPanel } from './SettingsPanel'
 
 export function TitleScreen({ hasSave, muted }: { hasSave: boolean; muted: boolean }) {
+  const [settings, setSettings] = useState(false)
   const api = () => gameApi.current
   return (
     <div className="screen title-screen">
@@ -21,6 +24,10 @@ export function TitleScreen({ hasSave, muted }: { hasSave: boolean; muted: boole
         <button className="btn btn-ghost" onClick={() => api()?.toggleMute()}>
           {muted ? '🔇 Звук выключен' : '🔊 Звук включён'}
         </button>
+        <button className="btn btn-ghost" onClick={() => setSettings((v) => !v)}>
+          ⚙ Настройки
+        </button>
+        {settings && <SettingsPanel onClose={() => setSettings(false)} />}
       </div>
       <div className="help-panel">
         <div className="help-col">

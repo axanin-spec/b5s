@@ -2,7 +2,15 @@
  * audio.ts — sound: sampled SFX (Stable Audio Open) over a synthesized fallback,
  * per-system background music (ACE-Step) with crossfade on jump, and a procedural
  * combat pulse driven by threat level. Mute is remembered in localStorage.
+ *
+ * Signal chain: destination ← limiter ← master(user master volume/mute) ←
+ *   ├─ sfxBus   (user SFX volume) — sampled + synthesized shots
+ *   └─ musicBus (user music volume) ← musicDuck(threat ducking) ← layers/pad,
+ *      the combat pulse sits on musicBus above the duck (it IS the threat).
+ * The limiter (DynamicsCompressor) keeps salvo pile-ups from clipping.
  */
+
+import { type GameSettings, loadSettings, onSettingsChange } from "./settings";
 
 export type SfxId =
   | "laser" | "enemyLaser" | "hitShield" | "hitHull" | "explosion" | "bigExplosion"
@@ -30,18 +38,22 @@ function writeMuted(v: boolean): void {
   }
 }
 
-interface SampleDef { file: string; gain: number; rate: [number, number] }
+interface SampleDef { files: string[]; gain: number; rate: [number, number] }
 
-/** Which recorded sample stands in for each SFX id, with per-shot variation range. */
+/**
+ * Which recorded samples stand in for each SFX id. Combat sounds carry two
+ * generated variants (Stable Audio Open, different seeds/prompts) — shots
+ * alternate between them, on top of the per-shot pitch/gain jitter.
+ */
 const SFX_SAMPLES: Partial<Record<SfxId, SampleDef>> = {
-  laser:       { file: "laser_light.wav", gain: 0.55, rate: [0.97, 1.07] },
-  enemyLaser:  { file: "laser_heavy.wav", gain: 0.34, rate: [0.92, 1.0] },
-  hitShield:   { file: "shield_hit.wav",  gain: 0.4,  rate: [0.97, 1.06] },
-  hitHull:     { file: "explosion_small.wav", gain: 0.28, rate: [1.22, 1.4] },
-  explosion:   { file: "explosion_small.wav", gain: 0.6, rate: [0.94, 1.08] },
-  bigExplosion:{ file: "explosion_big.wav", gain: 0.7, rate: [0.96, 1.05] },
-  alarm:       { file: "ui_alarm.wav",    gain: 0.3,  rate: [1, 1] },
-  ui:          { file: "ui_click.wav",    gain: 0.35, rate: [0.95, 1.1] },
+  laser:       { files: ["laser_light.wav", "laser_light_b.wav"], gain: 0.55, rate: [0.97, 1.07] },
+  enemyLaser:  { files: ["laser_heavy.wav", "laser_heavy_b.wav"], gain: 0.34, rate: [0.92, 1.0] },
+  hitShield:   { files: ["shield_hit.wav"], gain: 0.4, rate: [0.97, 1.06] },
+  hitHull:     { files: ["explosion_small.wav", "explosion_small_b.wav"], gain: 0.28, rate: [1.22, 1.4] },
+  explosion:   { files: ["explosion_small.wav", "explosion_small_b.wav"], gain: 0.6, rate: [0.94, 1.08] },
+  bigExplosion:{ files: ["explosion_big.wav", "explosion_big_b.wav"], gain: 0.7, rate: [0.96, 1.05] },
+  alarm:       { files: ["ui_alarm.wav"], gain: 0.3, rate: [1, 1] },
+  ui:          { files: ["ui_click.wav"], gain: 0.35, rate: [0.95, 1.1] },
 };
 
 /** Minor pentatonic around A — calm space-pad arpeggio, fallback if the track fails. */
@@ -52,6 +64,10 @@ interface AudioDebug {
   playing: string | null;
   samplesReady: number;
   muted: boolean;
+  /** Live user volumes from the settings store (Этап: меню настроек). */
+  volumes: { master: number; music: number; sfx: number };
+  /** Battle-theme layer state for automation checks. */
+  combat: "none" | "loading" | "ready" | "failed";
 }
 
 interface MusicLayer {
@@ -65,9 +81,15 @@ interface MusicLayer {
 export class AudioSystem {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
+  private limiter: DynamicsCompressorNode | null = null;
+  private sfxBus: GainNode | null = null;
   private musicBus: GainNode | null = null;
+  private musicDuck: GainNode | null = null;
   private padGain: GainNode | null = null;
   private combatGain: GainNode | null = null;
+  /** User volumes (settings store); applied to the buses in applyVolumes(). */
+  private settings: GameSettings = loadSettings();
+  private unsubSettings: (() => void) | null = null;
   private padTimer: ReturnType<typeof setInterval> | null = null;
   private combatTimer: ReturnType<typeof setInterval> | null = null;
   private padStep = 0;
@@ -83,17 +105,29 @@ export class AudioSystem {
   private musicStarted = false;
   private curSys: string | null = null;
   private lastPlaying: string | null = null;
+  // ACE-Step battle theme (music/combat.ogg): sits above the threat duck and
+  // fades in as the threat rises; the synth pulse shrinks to a thin accent
+  // while it is alive, and replaces it entirely when the track is missing.
+  private combatLayer: MusicLayer | null = null;
 
   // browsers require a first user interaction before the AudioContext can start
   private readonly unlock = () => {
     this.ensureCtx();
     this.detachUnlock();
     // any music whose play() was rejected pre-gesture can start now
-    if (this.musicStarted && this.curSys) void this.playLayer(this.curSys);
+    if (this.musicStarted) {
+      if (this.curSys) void this.playLayer(this.curSys);
+      if (this.music.has("combat")) void this.playLayer("combat");
+    }
   };
 
   constructor() {
     this.muted = readMuted();
+    // live volume changes from the settings menu (master/music/sfx)
+    this.unsubSettings = onSettingsChange((s) => {
+      this.settings = s;
+      this.applyVolumes();
+    });
     window.addEventListener("pointerdown", this.unlock);
     window.addEventListener("keydown", this.unlock);
     try {
@@ -115,11 +149,18 @@ export class AudioSystem {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.unsubSettings?.();
+    this.unsubSettings = null;
     this.detachUnlock();
     this.stopMusic();
     this.master?.disconnect();
+    this.sfxBus?.disconnect();
+    this.limiter?.disconnect();
     this.master = null;
+    this.sfxBus = null;
+    this.limiter = null;
     this.musicBus = null;
+    this.musicDuck = null;
     const ctx = this.ctx;
     this.ctx = null;
     if (ctx && ctx.state !== "closed") void ctx.close();
@@ -128,20 +169,45 @@ export class AudioSystem {
   private ensureCtx(): AudioContext {
     if (!this.ctx) {
       this.ctx = new AudioContext();
+      // master limiter: dozens of overlapping salvos must duck each other, not clip
+      this.limiter = this.ctx.createDynamicsCompressor();
+      this.limiter.threshold.value = -14;
+      this.limiter.knee.value = 8;
+      this.limiter.ratio.value = 12;
+      this.limiter.attack.value = 0.003;
+      this.limiter.release.value = 0.25;
+      this.limiter.connect(this.ctx.destination);
       this.master = this.ctx.createGain();
-      this.master.gain.value = this.muted ? 0 : 0.5;
-      this.master.connect(this.ctx.destination);
+      this.master.gain.value = this.muted ? 0 : this.settings.master;
+      this.master.connect(this.limiter);
+      this.sfxBus = this.ctx.createGain();
+      this.sfxBus.gain.value = this.settings.sfx;
+      this.sfxBus.connect(this.master);
       this.musicBus = this.ctx.createGain();
+      this.musicBus.gain.value = this.settings.music;
       this.musicBus.connect(this.master);
+      this.musicDuck = this.ctx.createGain();
+      this.musicDuck.gain.value = 1;
+      this.musicDuck.connect(this.musicBus);
     }
     if (this.ctx.state === "suspended") void this.ctx.resume();
     return this.ctx;
   }
 
+  /** Re-apply user volumes after a settings change (smooth, no zipper noise). */
+  private applyVolumes(): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    this.master?.gain.setTargetAtTime(this.muted ? 0 : this.settings.master, t, 0.05);
+    this.sfxBus?.gain.setTargetAtTime(this.settings.sfx, t, 0.05);
+    this.musicBus?.gain.setTargetAtTime(this.settings.music, t, 0.05);
+    this.publishDebug();
+  }
+
   toggleMute(): boolean {
     this.muted = !this.muted;
     writeMuted(this.muted);
-    if (this.master) this.master.gain.value = this.muted ? 0 : 0.5;
+    if (this.master) this.master.gain.value = this.muted ? 0 : this.settings.master;
     return this.muted;
   }
 
@@ -158,7 +224,7 @@ export class AudioSystem {
     osc.frequency.exponentialRampToValueAtTime(Math.max(1, f1), t + dur);
     env.gain.setValueAtTime(gain, t);
     env.gain.exponentialRampToValueAtTime(0.001, t + dur);
-    osc.connect(env).connect(this.master);
+    osc.connect(env).connect(this.sfxBus ?? this.master);
     osc.start(t);
     osc.stop(t + dur + 0.02);
   }
@@ -177,7 +243,7 @@ export class AudioSystem {
     filter.frequency.value = lowpass;
     const env = ctx.createGain();
     env.gain.value = gain;
-    src.connect(filter).connect(env).connect(this.master);
+    src.connect(filter).connect(env).connect(this.sfxBus ?? this.master);
     src.start();
   }
 
@@ -230,7 +296,7 @@ export class AudioSystem {
     src.playbackRate.value = r0 + Math.random() * (r1 - r0);
     const g = ctx.createGain();
     g.gain.value = def.gain * (0.85 + Math.random() * 0.3);
-    src.connect(g).connect(this.master);
+    src.connect(g).connect(this.sfxBus ?? this.master);
     src.start();
   }
 
@@ -240,10 +306,14 @@ export class AudioSystem {
     if (!this.master) return;
     const def = SFX_SAMPLES[id];
     if (def) {
-      const buf = this.sampleBuf.get(def.file);
-      if (buf) { this.playSample(buf, def); this.publishDebug(); return; }
-      // first call warms the cache; the synth voice covers this shot
-      void this.loadSample(def.file);
+      const ready = def.files.filter((f) => this.sampleBuf.has(f));
+      if (ready.length) {
+        const file = ready[Math.floor(Math.random() * ready.length)];
+        const buf = this.sampleBuf.get(file);
+        if (buf) { this.playSample(buf, def); this.publishDebug(); return; }
+      }
+      // warm the whole variant set; the synth voice covers the very first shot
+      for (const f of def.files) void this.loadSample(f);
     }
     this.synthSfx(id);
   }
@@ -266,13 +336,14 @@ export class AudioSystem {
     }
     const gain = ctx.createGain();
     gain.gain.value = 0;
-    srcNode.connect(gain).connect(this.musicBus);
+    srcNode.connect(gain).connect(this.musicDuck ?? this.musicBus);
     const layer: MusicLayer = { el, srcNode, gain, loaded: false, failed: false };
     el.addEventListener("canplay", () => { layer.loaded = true; void this.playLayer(sysId); });
     el.addEventListener("error", () => {
       layer.failed = true;
       // no track for this system — keep the synthesized pad alive instead
-      if (!this.padTimer) this.startPad();
+      // (the combat layer failing must not summon the pad over a fine theme)
+      if (sysId === this.curSys && !this.padTimer) this.startPad();
     });
     this.music.set(sysId, layer);
     return layer;
@@ -302,6 +373,8 @@ export class AudioSystem {
         playing: this.lastPlaying,
         samplesReady: this.sampleBuf.size,
         muted: this.muted,
+        volumes: { ...this.settings },
+        combat: !this.combatLayer ? "none" : this.combatLayer.failed ? "failed" : this.combatLayer.loaded ? "ready" : "loading",
       };
       (window as unknown as { __audioDebug: AudioDebug }).__audioDebug = d;
     } catch {
@@ -335,15 +408,19 @@ export class AudioSystem {
   startMusic(): void {
     if (this.disposed || this.musicStarted) return;
     const ctx = this.ensureCtx();
-    if (!this.master) return;
+    if (!this.master || !this.musicBus) return;
     this.musicStarted = true;
 
     this.combatGain = ctx.createGain();
     this.combatGain.gain.value = 0;
-    this.combatGain.connect(this.master);
+    this.combatGain.connect(this.musicBus); // above the duck — the pulse IS the threat
 
     if (this.curSys) void this.playLayer(this.curSys);
     else this.startPad(); // enterSystem hasn't run yet — pad holds until it does
+
+    // battle theme: preloaded silently, setThreat() rides its fader
+    this.combatLayer = this.musicLayer("combat");
+    if (this.combatLayer) void this.combatLayer.el.play().catch(() => { /* unlock retries */ });
 
     const pulse = () => {
       if (!this.ctx || !this.combatGain || this.muted) return;
@@ -361,12 +438,21 @@ export class AudioSystem {
     this.combatTimer = setInterval(pulse, 380);
   }
 
-  /** 0 = calm space, 1 = full combat — drives the combat layer and ducks the theme. */
+  /** 0 = calm space, 1 = full combat — crossfades theme → battle track. */
   setThreat(v: number): void {
-    if (!this.combatGain || !this.ctx || !this.musicBus) return;
+    if (!this.combatGain || !this.ctx || !this.musicDuck) return;
     const g = Math.max(0, Math.min(1, v));
-    this.combatGain.gain.setTargetAtTime(g * 0.9, this.ctx.currentTime, 0.4);
-    this.musicBus.gain.setTargetAtTime(1 - 0.45 * g, this.ctx.currentTime, 0.5);
+    const t = this.ctx.currentTime;
+    const combat = this.combatLayer;
+    const themeAlive = !!combat && combat.loaded && !combat.failed;
+    // battle theme takes the lead from ~40% threat (sits outside the duck)
+    if (combat && !combat.failed) {
+      const lead = Math.max(0, Math.min(1, (g - 0.22) / 0.5));
+      combat.gain.gain.setTargetAtTime(lead * 0.55, t, 0.7);
+    }
+    // the synth pulse thins to an accent once the real track can carry the fight
+    this.combatGain.gain.setTargetAtTime(g * (themeAlive ? 0.3 : 0.9), t, 0.4);
+    this.musicDuck.gain.setTargetAtTime(1 - 0.45 * g, t, 0.5);
   }
 
   /** Fallback ambient layer used before/instead of the generated tracks. */
@@ -375,7 +461,7 @@ export class AudioSystem {
     if (!ctx || !this.musicBus || this.padTimer) return;
     this.padGain = ctx.createGain();
     this.padGain.gain.value = 0.5;
-    this.padGain.connect(this.musicBus);
+    this.padGain.connect(this.musicDuck ?? this.musicBus);
     const padNote = () => {
       if (!this.ctx || !this.padGain || this.muted) return;
       const f = PAD_NOTES[this.padStep % PAD_NOTES.length];
@@ -415,6 +501,7 @@ export class AudioSystem {
       layer.gain.disconnect();
     }
     this.music.clear();
+    this.combatLayer = null;
     this.musicStarted = false;
   }
 }
