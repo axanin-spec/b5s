@@ -8,6 +8,8 @@ import type { GameState } from "./state";
 
 export interface HudData {
   credits: number;
+  /** Player's share of the galaxy's fixed credit mass (0..1); VICTORY_SHARE = win line. */
+  share: number;
   hull: number; maxHull: number;
   shield: number; maxShield: number;
   cargoUsed: number; cargoMax: number;

@@ -7,8 +7,8 @@
 
 import {
   BOLT_CFG, CONTRACTS, CONVOY, ECONOMY, FACTION_CFG, GATE_CFG, GOODS, OCCUPATION, PLAYER_CFG, POPULATION, QUALITY,
-  REPAIR_COST_PER_HP, REP, SAVE_VERSION, AUTOSAVE_INTERVAL, SHIELD_REGEN, SYSTEMS, UPGRADE_DEFS,
-  VICTORY_CREDITS, WEAPON_RATE, WEAPON_SHOTS, WORLD_CFG,
+  MONEY_TOTAL, POOLS, REPAIR_COST_PER_HP, REP, SAVE_VERSION, AUTOSAVE_INTERVAL, SHIELD_REGEN, SYSTEMS, UPGRADE_DEFS,
+  VICTORY_SHARE, WEAPON_RATE, WEAPON_SHOTS, WORLD_CFG,
 } from "./config";
 import { AudioSystem } from "./audio";
 import { GameLoop } from "./engine";
@@ -25,7 +25,7 @@ import { loadImage, loadPlanetTexture } from "./assets";
 import { economyTick, findDockTarget, generateWorld, goodName, kindName, priceOf, refreshAllPrices, updateOrbits } from "./world";
 import { loadSave, writeSave } from "./save";
 import { gameApi, uiBridge, type EndStats, type GameApi, type HudData, type MapSnapshot, type StationSnapshot } from "./uiBridge";
-import type { ActiveContract, Bolt, ContractOffer, Dockable, Faction, OccupationState, Pickup, PlayerState, SaveGame, Ship, UpgradeId } from "./types";
+import type { ActiveContract, Bolt, ContractOffer, Dockable, Faction, MoneyPools, OccupationState, Pickup, PlayerState, PoolId, SaveGame, Ship, UpgradeId } from "./types";
 import { AiState } from "./types";
 
 const MAX_SHIPS = 40;
@@ -200,6 +200,8 @@ export class Game {
   private waypoint: { x: number; y: number; label: string; targetId: string } | null = null;
   /** Static per-system schematics for the chart (seeded, computed once). */
   private layoutCache = new Map<string, Dockable[]>();
+  /** Closed money circulation (Этап 5a): Σ pools + player.credits === MONEY_TOTAL at all times. */
+  private pools: MoneyPools = { ...POOLS };
 
   private static freshPlayerState(): PlayerState {
     return {
@@ -245,7 +247,7 @@ export class Game {
       this.bolts.push({ active: false, friendly: true, from: "player", x: 0, y: 0, vx: 0, vy: 0, life: 0, dmg: 0 });
     }
     for (let i = 0; i < MAX_PICKUPS; i++) {
-      this.pickups.push({ active: false, kind: "credits", goodId: "food", amount: 0, x: 0, y: 0, vx: 0, vy: 0, life: 0 });
+      this.pickups.push({ active: false, kind: "credits", src: "clan", goodId: "food", amount: 0, x: 0, y: 0, vx: 0, vy: 0, life: 0 });
     }
     for (let i = 0; i < QUALITY.PARTICLES_HIGH; i++) {
       this.particles.push({ life: 0, maxLife: 1, x: 0, y: 0, vx: 0, vy: 0, ci: 0, size: 5 });
@@ -606,11 +608,13 @@ export class Game {
       return;
     }
 
-    // loot
+    // loot — credits are somebody's money: clans pay for their crews, the Alliance
+    // for its freight, the patrol for its hulls (closed circulation, Этап 5a)
     const cfg = FACTION_CFG[s.faction as keyof typeof FACTION_CFG];
     if (cfg && cfg.bounty[1] > 0) {
       const amount = Math.round(cfg.bounty[0] + this.rnd() * (cfg.bounty[1] - cfg.bounty[0]));
-      this.spawnPickup("credits", "", amount, s.x, s.y);
+      const src: PoolId = s.faction === "trader" ? "alliance" : s.faction === "patrol" ? "patrol" : "clan";
+      this.spawnPickup("credits", "", amount, s.x, s.y, src);
     }
     if (s.faction === "trader" || (s.faction === "pirate" && this.rnd() < 0.4)) {
       const pods = s.faction === "trader" ? 2 : 1;
@@ -683,11 +687,12 @@ export class Game {
       if (sh.active && (sh.faction === "pirate" || sh.faction === "boss")) this.freeShip(i);
     }
     this.bossIdx = -1;
-    this.player.credits += OCCUPATION.LIBERATION_REWARD;
-    this.player.earned += OCCUPATION.LIBERATION_REWARD;
+    // the liberation bonus is patrol money — a lean treasury pays what it can (5a)
+    const bountyPaid = this.gain(OCCUPATION.LIBERATION_REWARD, "patrol");
+    this.player.earned += bountyPaid;
     this.addRep(OCCUPATION.REP_LIBERATE);
     this.audio.sfx("credits");
-    this.setNews(`⚑ СИСТЕМА ${freed.toUpperCase()} ОСВОБОЖДЕНА! Пираты уходят. Патруль платит ₡${OCCUPATION.LIBERATION_REWARD.toLocaleString("ru-RU")}. Флагманов потоплено: ${this.player.bossKills}/${OCCUPATION.FLAGSHIPS_TO_WIN}.`);
+    this.setNews(`⚑ СИСТЕМА ${freed.toUpperCase()} ОСВОБОЖДЕНА! Пираты уходят. Патруль платит ₡${bountyPaid.toLocaleString("ru-RU")}. Флагманов потоплено: ${this.player.bossKills}/${OCCUPATION.FLAGSHIPS_TO_WIN}.`);
     if (this.sm.state === "docked" && this.dockTarget) this.genOffers(this.dockTarget); // broker returns with the patrols
     this.pushHud();
     this.saveNow();
@@ -696,12 +701,12 @@ export class Game {
     }
   }
 
-  private spawnPickup(kind: "credits" | "cargo", goodId: string, amount: number, x: number, y: number): void {
+  private spawnPickup(kind: "credits" | "cargo", goodId: string, amount: number, x: number, y: number, src: PoolId = "clan"): void {
     for (let i = 0; i < MAX_PICKUPS; i++) {
       const p = this.pickups[i];
       if (p.active) continue;
       p.active = true;
-      p.kind = kind; p.goodId = goodId; p.amount = amount;
+      p.kind = kind; p.goodId = goodId; p.amount = amount; p.src = src;
       p.x = x; p.y = y;
       const a = this.rnd() * Math.PI * 2;
       p.vx = Math.cos(a) * 60; p.vy = Math.sin(a) * 60;
@@ -858,6 +863,7 @@ export class Game {
     this.clearEntities();
     this.player = Game.freshPlayerState();
     this.occ = { systemId: OCCUPATION.START_SYSTEM, held: true, t: OCCUPATION.FLAGSHIP_BUILD, flagshipBuilt: false };
+    this.pools = { ...POOLS };
     this.waypoint = null;
     this.enterSystem(SYSTEMS[0].id);
     // spawn just outside the first station, pointed into open space
@@ -896,6 +902,7 @@ export class Game {
       systemId: save.occupation.systemId, held: save.occupation.held,
       t: save.occupation.t, flagshipBuilt: save.occupation.flagshipBuilt,
     };
+    this.pools = save.pools ? { ...save.pools } : { ...POOLS };
     this.waypoint = null;
     this.enterSystem(save.system);
     // restore an in-progress hunt/transport contract (escorts do not survive a reload)
@@ -959,6 +966,7 @@ export class Game {
         systemId: this.occ.systemId, held: this.occ.held,
         t: Math.round(this.occ.t), flagshipBuilt: this.occ.flagshipBuilt,
       },
+      pools: { ...this.pools },
       bossKills: this.player.bossKills,
       victoryShown: this.player.victoryShown,
       savedAt: Date.now(),
@@ -967,11 +975,39 @@ export class Game {
     uiBridge.set({ hasSave: true });
   }
 
-  private netWorth(): number {
-    let w = this.player.credits;
-    const hub = this.dockables.find((d) => d.kind === "hub") ?? this.dockables[0];
-    for (const g of GOODS) w += (this.player.cargo[g.id] ?? 0) * priceOf(hub, g.id) * ECONOMY.SELL_FACTOR;
-    return w;
+  /**
+   * Pay the player out of a treasury (clamped to what it holds — the galaxy's money
+   * is fixed, nobody prints credits). Returns the amount actually paid.
+   */
+  private gain(n: number, pool: PoolId): number {
+    const paid = Math.max(0, Math.min(Math.round(n), Math.round(this.pools[pool])));
+    this.pools[pool] -= paid;
+    this.player.credits += paid;
+    return paid;
+  }
+
+  /** Spend player credits into a treasury — the mirror of gain(). */
+  private pay(n: number, pool: PoolId): void {
+    const spent = Math.round(n);
+    this.player.credits -= spent;
+    this.pools[pool] += spent;
+  }
+
+  /** Treasury a docked trade runs through: smuggler cash in an occupied system, civilian capital elsewhere. */
+  private tradePool(): PoolId {
+    return this.dockTarget && this.hereOccupied() ? "clan" : "stations";
+  }
+
+  /** Player's share of the galaxy's fixed credit mass (0..1) — the economic victory meter. */
+  sharePct(): number {
+    return this.player.credits / MONEY_TOTAL;
+  }
+
+  /** Debug/QA: the closed-circulation invariant. delta must stay 0 — see the balance autotest. */
+  econAudit(): { total: number; player: number; pools: MoneyPools; delta: number } {
+    const sum = this.pools.patrol + this.pools.alliance + this.pools.clan + this.pools.stations;
+    const player = Math.round(this.player.credits);
+    return { total: MONEY_TOTAL, player, pools: { ...this.pools }, delta: sum + player - MONEY_TOTAL };
   }
 
   private endStats(victory: boolean, reason: string): EndStats {
@@ -1037,14 +1073,25 @@ export class Game {
     this.pushHud();
   }
 
+  /**
+   * Live trade multipliers: reputation bracket + black-market skew when the clans
+   * hold the system. Single source of truth — the terminal and the till must agree.
+   */
+  private priceMods(): { buy: number; sell: number } {
+    const tm = this.tradeMod();
+    return this.dockTarget && this.hereOccupied()
+      ? { buy: tm.buy * OCCUPATION.BLACK.buy, sell: tm.sell * OCCUPATION.BLACK.sell }
+      : tm;
+  }
+
   buy(goodId: string, qty: number): void {
     const d = this.dockTarget;
     if (!d || this.sm.state !== "docked") return;
-    const price = Math.max(1, Math.round(priceOf(d, goodId) * this.tradeMod().buy));
+    const price = Math.max(1, Math.round(priceOf(d, goodId) * this.priceMods().buy));
     const space = this.cargoMax() - this.cargoUsed();
     const n = Math.min(qty, space, Math.floor(this.player.credits / price));
     if (n <= 0) return;
-    this.player.credits -= n * price;
+    this.pay(n * price, this.tradePool());
     this.player.cargo[goodId] = (this.player.cargo[goodId] ?? 0) + n;
     this.player.traded += n * price;
     this.audio.sfx("trade");
@@ -1056,14 +1103,23 @@ export class Game {
     const d = this.dockTarget;
     if (!d || this.sm.state !== "docked") return;
     const have = this.player.cargo[goodId] ?? 0;
-    const n = Math.min(qty, have);
+    let n = Math.min(qty, have);
     if (n <= 0) return;
-    const unit = Math.max(1, Math.round(priceOf(d, goodId) * ECONOMY.SELL_FACTOR * this.tradeMod().sell));
-    const gain = unit * n;
+    const unit = Math.max(1, Math.round(priceOf(d, goodId) * ECONOMY.SELL_FACTOR * this.priceMods().sell));
+    // the counter pays with real money only: smuggler cash below occupied stations,
+    // civilian capital elsewhere — an empty till buys nothing (5a, closed circulation)
+    const pool = this.tradePool();
+    n = Math.min(n, Math.floor(this.pools[pool] / unit));
+    if (n <= 0) {
+      this.audio.sfx("alarm");
+      this.setNews(pool === "clan" ? "Клановая касса пуста — контрабандистам платить нечем." : "Касса станции пуста — Альянс зажал кредиты.");
+      return;
+    }
+    const payout = unit * n;
     this.player.cargo[goodId] = have - n;
-    this.player.credits += gain;
-    this.player.earned += gain;
-    this.player.traded += gain;
+    const paid = this.gain(payout, pool);
+    this.player.earned += paid;
+    this.player.traded += paid;
     this.audio.sfx("credits");
     this.pushStation();
     this.pushHud();
@@ -1077,7 +1133,7 @@ export class Game {
     if (lvl >= line.levels.length - 1) return;
     const cost = line.levels[lvl + 1].cost;
     if (this.player.credits < cost) return;
-    this.player.credits -= cost;
+    this.pay(cost, "stations"); // the shipyards run on station capital
     this.player.upgrades[id as UpgradeId] = lvl + 1;
     this.applyPlayerStats();
     if (id === "shield") this.ships[0].shield = this.ships[0].maxShield;
@@ -1095,7 +1151,7 @@ export class Game {
     if (missing <= 0) return;
     const cost = missing * REPAIR_COST_PER_HP;
     if (this.player.credits < cost) return;
-    this.player.credits -= cost;
+    this.pay(cost, "stations");
     p.hp = p.maxHp;
     this.audio.sfx("upgrade");
     this.pushStation();
@@ -1137,7 +1193,7 @@ export class Game {
       this.setNews(`Не хватает ₡${(cost - Math.round(this.player.credits)).toLocaleString("ru-RU")} на штраф трибунала.`);
       return;
     }
-    this.player.credits -= cost;
+    this.pay(cost, "patrol"); // tribunal fines refill the patrol treasury
     // the tribunal receipt ends the hunt outright: standing jumps back above the vendetta line
     r.patrol = Math.min(REP.MAX, Math.max(r.patrol + REP.FINE.GAIN, REP.HOSTILE_PATROL + 1));
     r.trader = Math.min(REP.MAX, r.trader + REP.FINE.TRADER_GAIN);
@@ -1243,11 +1299,11 @@ export class Game {
     const c = this.contract;
     if (!c) return;
     this.contract = null;
-    this.player.credits += c.reward;
-    this.player.earned += c.reward;
+    const paid = this.gain(c.reward, "alliance"); // contract money comes out of the Alliance fund
+    this.player.earned += paid;
     this.addRep(CONTRACTS.REP[c.kind]);
     this.audio.sfx("credits");
-    this.setNews(`Контракт выполнен: ${c.title} — ${reason}. +₡${c.reward.toLocaleString("ru-RU")}`);
+    this.setNews(`Контракт выполнен: ${c.title} — ${reason}. +₡${paid.toLocaleString("ru-RU")}`);
     if (this.sm.state === "docked" && this.dockTarget) this.genOffers(this.dockTarget);
     this.pushStation();
     this.pushHud();
@@ -1289,11 +1345,11 @@ export class Game {
     this.convoy = null;
     for (const s of this.ships) if (s.active && s.raidId === id) s.raidId = -1; // survivors go back to ordinary piracy
     if (win) {
-      this.player.credits += CONVOY.REWARD;
-      this.player.earned += CONVOY.REWARD;
+      const paid = this.gain(CONVOY.REWARD, "alliance");
+      this.player.earned += paid;
       this.addRep(CONVOY.REP);
       this.audio.sfx("credits");
-      this.setNews(`${reason} Торговый альянс платит ₡${CONVOY.REWARD}.`);
+      this.setNews(`${reason} Торговый альянс платит ₡${paid}.`);
     } else {
       this.setNews(reason);
     }
@@ -1581,9 +1637,9 @@ export class Game {
     /* ---- pirate occupation front ---- */
     this.updateOccupation(dt);
 
-    /* ---- economic victory ---- */
-    if (!this.player.victoryShown && this.netWorth() >= VICTORY_CREDITS) {
-      this.victory("Вы сколотили состояние в полмиллиона кредитов — легенда торговых путей!");
+    /* ---- economic victory: own a quarter of the galaxy's money ---- */
+    if (!this.player.victoryShown && this.sharePct() >= VICTORY_SHARE) {
+      this.victory(`Вы выкупили четверть экономики Галактики — доля рынка ${(this.sharePct() * 100).toFixed(1)}%! Кредиты всей системы стекаются к вам.`);
     }
 
     /* ---- threat music ---- */
@@ -1996,8 +2052,9 @@ export class Game {
       }
       if (d < p.radius + 40) {
         if (pk.kind === "credits") {
-          this.player.credits += pk.amount;
-          this.player.earned += pk.amount;
+          // paid out of the dead crew's treasury — an empty one pays what little it has
+          const paid = this.gain(pk.amount, pk.src);
+          this.player.earned += paid;
           this.audio.sfx("credits");
           pk.active = false;
         } else if (this.cargoUsed() < this.cargoMax()) {
@@ -2395,6 +2452,7 @@ export class Game {
     }
     const hud: HudData = {
       credits: Math.round(this.player.credits),
+      share: this.sharePct(),
       hull: Math.max(0, Math.round(p.hp)), maxHull: Math.round(p.maxHp),
       shield: Math.max(0, Math.round(p.shield)), maxShield: Math.round(p.maxShield),
       cargoUsed: this.cargoUsed(), cargoMax: this.cargoMax(),
@@ -2425,11 +2483,8 @@ export class Game {
     if (!d) return;
     const p = this.ships[0];
     const occupied = this.hereOccupied();
-    const tm = this.tradeMod();
     // black market skews both directions: smugglers' goods cheap, stolen cargo paid fat
-    const mod = occupied
-      ? { buy: tm.buy * OCCUPATION.BLACK.buy, sell: tm.sell * OCCUPATION.BLACK.sell }
-      : tm;
+    const mod = this.priceMods();
     const prices: StationSnapshot["prices"] = {};
     for (const g of GOODS) {
       const base = priceOf(d, g.id);
@@ -2654,6 +2709,8 @@ export class Game {
       get quality() { return self.quality; },
       setQuality: (q: number) => self.setQuality(Math.max(0, Math.min(2, q))),
     };
+    // closed-circulation audit (Этап 5a): delta must be 0 — the balance autotest asserts it
+    (window as unknown as Record<string, unknown>).__econAudit = () => this.econAudit();
     window.__gameProbe = () => {
       const p = this.ships[0];
       // contract with scripts/verify-game.mjs: W (up-screen, +y world) must decrease probe z

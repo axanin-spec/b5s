@@ -3,7 +3,7 @@
  * Browser-local only: does not sync across devices; clearing browser data loses it.
  */
 
-import { GOODS, SAVE_KEY, SAVE_VERSION, UPGRADE_DEFS } from "./config";
+import { GOODS, MONEY_TOTAL, POOLS, SAVE_KEY, SAVE_VERSION, UPGRADE_DEFS } from "./config";
 import { storage } from "./storage";
 import type { SaveGame, UpgradeLevels } from "./types";
 
@@ -63,6 +63,12 @@ export function loadSave(): SaveGame | null {
   if (typeof s.occupation !== "object" || s.occupation === null) return null;
   if (typeof s.occupation.systemId !== "string" || !isBool(s.occupation.held) || !isNum(s.occupation.t) || !isBool(s.occupation.flagshipBuilt)) return null;
   if (!isNum(s.bossKills) || s.bossKills < 0) return null;
+  // v6: closed money pools — every pool must be a sane finite number
+  if (typeof s.pools !== "object" || s.pools === null) return null;
+  for (const k of Object.keys(POOLS)) {
+    const v = (s.pools as Record<string, unknown>)[k];
+    if (!isNum(v) || v < 0 || v > MONEY_TOTAL) return null;
+  }
   return s;
 }
 

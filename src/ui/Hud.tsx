@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { REP } from '@/game/config'
+import { REP, VICTORY_SHARE } from '@/game/config'
 import { gameApi, type Snapshot } from '@/game/uiBridge'
 
 function fmt(n: number): string {
@@ -85,6 +85,12 @@ export function Hud({ snap, isTouch }: { snap: Snapshot; isTouch: boolean }) {
         <div className="hud-system">✦ {hud.systemName}</div>
         {hud.occupied && <div className="hud-occupied">⚑ ОККУПАЦИЯ ПИРАТОВ</div>}
         <div className="hud-credits">₡ {fmt(hud.credits)}</div>
+        <div className={`hud-share${hud.share >= VICTORY_SHARE ? ' won' : ''}`} title="Ваша доля в экономике Галактики — соберите 25% для победы">
+          <div className="share-track">
+            <div className="share-fill" style={{ width: `${Math.min(100, (hud.share / VICTORY_SHARE) * 100)}%` }} />
+          </div>
+          <span className="share-label">доля {(hud.share * 100).toFixed(1)}%</span>
+        </div>
         <div className="hud-line">Трюм: {hud.cargoUsed}/{hud.cargoMax}</div>
         <div className="hud-line">Победы: {hud.kills}</div>
         <div className="hud-rep" title="Репутация во фракциях">

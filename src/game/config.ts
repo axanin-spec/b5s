@@ -112,7 +112,31 @@ export const BOLT_CFG = {
   RADIUS: 14,
 } as const;
 
-export const VICTORY_CREDITS = 500_000;
+/* ------------------------------------------------------------------ */
+/* Closed money circulation (Этап 5a)                                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The galaxy holds a FIXED mass of credits split into pools; every credit the
+ * player earns comes out of a pool and every credit spent flows back in:
+ * Σ pools + player.credits = MONEY_TOTAL (checked by __econAudit() + balance autotest).
+ *  • patrol   — treasury: pays bounties/liberation, receives fines;
+ *  • alliance — fund: pays contract/convoy rewards (and the trader fleet in 5b);
+ *  • clan     — pirate war-chest: loot drops pay out of it; sunk ships drain it (5c);
+ *  • stations — civilian working capital: buys cargo, sells upgrades/repairs.
+ */
+export const POOLS = {
+  patrol: 500_000,
+  alliance: 650_000,
+  clan: 350_000,
+  stations: 1_000_000,
+} as const;
+
+/** Total credits in the galaxy — constant for the whole run (pools + player start). */
+export const MONEY_TOTAL = POOLS.patrol + POOLS.alliance + POOLS.clan + POOLS.stations + PLAYER_CFG.START_CREDITS;
+
+/** Economic victory: own this share of the galaxy's credits (market-share progress bar in the HUD). */
+export const VICTORY_SHARE = 0.25;
 
 /* ------------------------------------------------------------------ */
 /* Economy                                                             */
@@ -282,8 +306,8 @@ export const REPAIR_COST_PER_HP = 6;
 /* ------------------------------------------------------------------ */
 
 export const SAVE_KEY = "savegame";
-// v4: system specialization + pirate occupation front (replaces the old chase-boss flags)
-export const SAVE_VERSION = 5;
+// v6: closed money pools (pools + player = MONEY_TOTAL); older saves are rejected
+export const SAVE_VERSION = 6;
 export const AUTOSAVE_INTERVAL = 30;
 
 /* ------------------------------------------------------------------ */

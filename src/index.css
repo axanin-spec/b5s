@@ -232,6 +232,16 @@ kbd {
 .hud-line { color: var(--text-dim); margin-top: 2px; }
 .hud-outlaw { color: var(--danger); font-weight: 700; margin-top: 4px; font-size: 12px; letter-spacing: 0.08em; }
 
+/* доля в экономике Галактики — полоска экономической победы (Этап 5a) */
+.hud-share { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.share-track {
+  flex: 1; height: 6px; border-radius: 3px; background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 210, 74, 0.25); overflow: hidden; min-width: 70px;
+}
+.share-fill { height: 100%; background: linear-gradient(90deg, #b8860b, var(--gold)); box-shadow: 0 0 8px rgba(255, 210, 74, 0.5); transition: width 0.4s; }
+.share-label { font-size: 10px; color: var(--text-dim); letter-spacing: 0.06em; font-variant-numeric: tabular-nums; }
+.hud-share.won .share-label { color: var(--gold); font-weight: 700; }
+
 /* stage 3 · always-on reputation chips in the HUD                        */
 .hud-rep { display: flex; gap: 6px; margin-top: 6px; }
 .rep-chip {

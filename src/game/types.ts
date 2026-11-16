@@ -52,6 +52,16 @@ export interface Ship {
 }
 
 /* ------------------------------------------------------------------ */
+/* Money pools (closed circulation, Этап 5a)                           */
+/* ------------------------------------------------------------------ */
+
+/** Which treasury a credit flow runs through — see POOLS in config. */
+export type PoolId = keyof typeof import("./config").POOLS;
+
+/** Current funds per pool; Σ pools + player.credits stays equal to MONEY_TOTAL. */
+export type MoneyPools = Record<PoolId, number>;
+
+/* ------------------------------------------------------------------ */
 /* Projectiles / pickups / particles                                   */
 /* ------------------------------------------------------------------ */
 
@@ -70,6 +80,8 @@ export interface Bolt {
 export interface Pickup {
   active: boolean;
   kind: "credits" | "cargo";
+  /** Credit drops are paid out of this pool when collected (cargo pods: unused). */
+  src: PoolId;
   goodId: string;
   amount: number;
   x: number; y: number;
@@ -217,6 +229,8 @@ export interface SaveGame {
   stats: { kills: number; earned: number; traded: number; playTime: number };
   /** The dynamic pirate front — see OccupationState. */
   occupation: { systemId: string; held: boolean; t: number; flagshipBuilt: boolean };
+  /** v6: funds of every money pool — with player.credits they must sum to MONEY_TOTAL. */
+  pools: MoneyPools;
   bossKills: number;
   victoryShown: boolean;
   savedAt: number;
