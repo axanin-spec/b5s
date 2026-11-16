@@ -55,6 +55,10 @@ export interface Ship {
   /** Escort/flee bookkeeping. */
   thinkT: number;
   trailT: number;
+  /** Pirate disengagement timer (AI polish): >0 = pulled out of the fight to let shields regen. */
+  regroupT: number;
+  /** A raider's get-out-of-a-fight pass is one-shot; caught broken again, it leaves the system. */
+  regroupUsed: boolean;
   /** Renderer handle (owned by entities.ts). */
   sprite: unknown;
 }

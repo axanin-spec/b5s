@@ -44,7 +44,7 @@ function blankShip(): Ship {
     dmg: 0, fireRate: 0, fireCooldown: 0, sinceHit: 99,
     ai: AiState.Wander, targetIdx: -1, tx: 0, ty: 0, wanderT: 0,
     routeFrom: 0, routeTo: 0, name: "", wallet: 0, cargo: {},
-    escortId: -1, raidId: -1, raidGuard: false, thinkT: 0, trailT: 0, sprite: null,
+    escortId: -1, raidId: -1, raidGuard: false, thinkT: 0, trailT: 0, regroupT: 0, regroupUsed: false, sprite: null,
   };
 }
 
@@ -2301,7 +2301,8 @@ export class Game {
 
       // keep NPCs inside the world; fleeing pirates may leave (despawn)
       if (Math.abs(s.x) > HALF * 1.25 || Math.abs(s.y) > HALF * 1.25) {
-        if (s.faction === "pirate" && s.ai === AiState.Flee) { this.freeShip(i); continue; }
+        // only a pirate running for good leaves the system; a regrouping one stays clamped inside
+        if (s.faction === "pirate" && s.ai === AiState.Flee && s.regroupT <= 0) { this.freeShip(i); continue; }
         s.x = Math.max(-HALF, Math.min(HALF, s.x));
         s.y = Math.max(-HALF, Math.min(HALF, s.y));
       }
@@ -2333,8 +2334,14 @@ export class Game {
           const td = Math.hypot(t.x - s.x, t.y - s.y);
           const range = s.faction === "boss" ? 1100 : 760;
           if (td < range && canHit(s.faction, t.faction, this.patrolHostile())) {
-            const aim = Math.atan2(t.y - s.y, t.x - s.x) + (this.rnd() - 0.5) * 0.12;
-            this.fireBolt(i, aim, s.dmg, BOLT_CFG.SPEED * 0.82);
+            // lead the target (AI polish): two intercept passes to where it will be at bolt arrival
+            const boltSpd = BOLT_CFG.SPEED * 0.82;
+            let tt = td / boltSpd;
+            for (let k = 0; k < 2; k++) {
+              tt = Math.hypot(t.x + t.vx * tt - s.x, t.y + t.vy * tt - s.y) / boltSpd;
+            }
+            const aim = Math.atan2(t.y + t.vy * tt - s.y, t.x + t.vx * tt - s.x) + (this.rnd() - 0.5) * 0.12;
+            this.fireBolt(i, aim, s.dmg, boltSpd);
             s.fireCooldown = 1 / s.fireRate;
             if (td < 2600 && p.active) this.audio.sfx("enemyLaser");
           }
@@ -2450,13 +2457,36 @@ export class Game {
     }
 
     /* pirates */
-    // low hull → run for the edge of the system
-    if (s.hp < s.maxHp * 0.28 && s.ai !== AiState.Flee) {
+    // low hull → run for the edge of the system for good; a raider whose one regroup
+    // pass is spent and whose shields are broken again doesn't get a second get-out
+    const spentAndBroken = s.regroupUsed && s.shield <= 0 && s.hp < s.maxHp * 0.45 && s.sinceHit < 3;
+    if ((s.hp < s.maxHp * 0.28 || spentAndBroken) && s.ai !== AiState.Flee) {
       s.ai = AiState.Flee;
+      s.regroupT = 0;
       const a = Math.atan2(s.y, s.x) + (this.rnd() - 0.5);
       s.tx = Math.cos(a) * HALF * 1.4;
       s.ty = Math.sin(a) * HALF * 1.4;
       s.targetIdx = -1;
+    }
+    // tactical disengagement (AI polish): a wounded raider with broken shields peels off,
+    // loiters off-range until its shields knit back (or 7 s pass), then dives into the fight again
+    if (s.regroupT > 0) {
+      s.regroupT -= 0.45; // one think tick worth of time
+      if (s.regroupT <= 0 || s.shield > s.maxShield * 0.5) {
+        s.regroupT = 0; s.ai = AiState.Wander; // back in — target selection below re-chases
+      }
+      else {
+        s.ai = AiState.Flee; s.targetIdx = -1;
+        return;
+      }
+    } else if (s.ai === AiState.Chase && !s.regroupUsed && s.shield <= 0 && s.hp < s.maxHp * 0.55 && s.sinceHit < 3) {
+      s.regroupT = 7;
+      s.regroupUsed = true;
+      s.ai = AiState.Flee; s.targetIdx = -1;
+      const a = Math.atan2(s.y, s.x); // pull out toward open space, not off the map
+      s.tx = Math.cos(a) * HALF * 0.9;
+      s.ty = Math.sin(a) * HALF * 0.9;
+      return;
     }
     if (s.ai === AiState.Flee) return;
 
