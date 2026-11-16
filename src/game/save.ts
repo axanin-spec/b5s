@@ -70,6 +70,16 @@ export function loadSave(): SaveGame | null {
     const v = (s.pools as Record<string, unknown>)[k];
     if (!isNum(v) || v < -MONEY_TOTAL || v > MONEY_TOTAL) return null;
   }
+  // v6 (5d extension): the raid operation on the ops desk — optional, old v6 saves omit it
+  if (s.raid !== null && s.raid !== undefined) {
+    const r = s.raid;
+    if (typeof r !== "object") return null;
+    if (typeof r.targetId !== "string" || r.targetId.length === 0) return null;
+    if (!isNum(r.timeLeft) || r.timeLeft < 0 || r.timeLeft > 1e4) return null;
+    if (!isNum(r.cooldown) || r.cooldown < 0 || r.cooldown > 1e4) return null;
+    if (!isNum(r.taken) || r.taken < 0) return null;
+    if (!Array.isArray(r.grabbed) || r.grabbed.length > 8 || r.grabbed.some((g) => typeof g !== "string")) return null;
+  }
   return s;
 }
 

@@ -50,6 +50,8 @@ export interface Ship {
   escortId: number;
   /** Convoy-raid event this ship belongs to (event id, -1 = none). */
   raidId: number;
+  /** Patrol escort raised by the player's raid operation (Этап 5d) — stands down when it ends. */
+  raidGuard: boolean;
   /** Escort/flee bookkeeping. */
   thinkT: number;
   trailT: number;
@@ -203,6 +205,29 @@ export interface OccupationState {
 }
 
 /* ------------------------------------------------------------------ */
+/* Raid operation (Этап 5d: налёт с карты)                             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The player's own raid on a free system, launched from the galaxy map: an
+ * operation window during which station storehouses can be emptied at speed
+ * (trade embargo in effect), patrol escorts hunt, and the operation desk
+ * cools down afterwards.
+ */
+export interface RaidOp {
+  /** System chosen as the operation target. */
+  targetId: string;
+  /** Window remaining (seconds); ≤0 = over, cooldown running. */
+  timeLeft: number;
+  /** Seconds until the map offers the operation button again. */
+  cooldown: number;
+  /** Storehouse dockable ids already emptied during this operation. */
+  grabbed: string[];
+  /** Credits taken so far this operation (news line). */
+  taken: number;
+}
+
+/* ------------------------------------------------------------------ */
 /* Save game                                                           */
 /* ------------------------------------------------------------------ */
 
@@ -237,6 +262,8 @@ export interface SaveGame {
   occupation: { systemId: string; held: boolean; t: number; flagshipBuilt: boolean };
   /** v6: funds of every money pool — with player.credits they must sum to MONEY_TOTAL. */
   pools: MoneyPools;
+  /** v6 (5d extension, optional): raid operation on the ops desk, null/absent = none. */
+  raid?: { targetId: string; timeLeft: number; cooldown: number; grabbed: string[]; taken: number } | null;
   bossKills: number;
   victoryShown: boolean;
   savedAt: number;

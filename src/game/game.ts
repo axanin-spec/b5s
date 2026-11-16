@@ -6,7 +6,7 @@
  */
 
 import {
-  BOLT_CFG, CONTRACTS, CONVOY, ECONOMY, FACTION_CFG, GATE_CFG, GOODS, OCCUPATION, PIRATE_ECON, PLAYER_CFG, POPULATION, QUALITY,
+  BOLT_CFG, CONTRACTS, CONVOY, ECONOMY, FACTION_CFG, GATE_CFG, GOODS, OCCUPATION, PIRATE_ECON, PLAYER_CFG, POPULATION, QUALITY, RAID,
   MONEY_TOTAL, POOLS, REPAIR_COST_PER_HP, REP, SAVE_VERSION, AUTOSAVE_INTERVAL, SHIELD_REGEN, SYSTEMS, TRADER_AI, UPGRADE_DEFS,
   VICTORY_SHARE, WEAPON_RATE, WEAPON_SHOTS, WORLD_CFG,
 } from "./config";
@@ -25,7 +25,7 @@ import { loadImage, loadPlanetTexture } from "./assets";
 import { economyTick, findDockTarget, generateWorld, goodName, kindName, priceOf, refreshAllPrices, updateOrbits } from "./world";
 import { loadSave, writeSave } from "./save";
 import { gameApi, uiBridge, type EndStats, type GameApi, type HudData, type MapSnapshot, type RadioSnapshot, type StationSnapshot } from "./uiBridge";
-import type { ActiveContract, Bolt, ContractOffer, Dockable, Faction, MoneyPools, OccupationState, Pickup, PlayerState, PoolId, SaveGame, Ship, UpgradeId } from "./types";
+import type { ActiveContract, Bolt, ContractOffer, Dockable, Faction, MoneyPools, OccupationState, Pickup, PlayerState, PoolId, RaidOp, SaveGame, Ship, UpgradeId } from "./types";
 import { AiState } from "./types";
 
 const MAX_SHIPS = 40;
@@ -44,7 +44,7 @@ function blankShip(): Ship {
     dmg: 0, fireRate: 0, fireCooldown: 0, sinceHit: 99,
     ai: AiState.Wander, targetIdx: -1, tx: 0, ty: 0, wanderT: 0,
     routeFrom: 0, routeTo: 0, name: "", wallet: 0, cargo: {},
-    escortId: -1, raidId: -1, thinkT: 0, trailT: 0, sprite: null,
+    escortId: -1, raidId: -1, raidGuard: false, thinkT: 0, trailT: 0, sprite: null,
   };
 }
 
@@ -190,6 +190,13 @@ export class Game {
   /** Convoy-raid event currently on the news wire, null = quiet. */
   private convoy: { id: number; t: number; done: number; traderIdx: number } | null = null;
   private convoyT: number = CONVOY.FIRST_DELAY;
+
+  /* raid operation (Этап 5d: налёт — операция с карты) */
+  /** Active/cooled-down raid on the ops desk, null = the desk is clear. */
+  private raid: RaidOp | null = null;
+  /** Storehouse being emptied right now (dockable id) + elapsed hover seconds. */
+  private grabTarget: string | null = null;
+  private grabT = 0;
 
   /* pirate occupation front + star chart */
   private occ: OccupationState = {
@@ -1086,6 +1093,8 @@ export class Game {
         this.pickTraderRoute(idx);
       }
     }
+    // the patrol response to the player's raid re-forms on every arrival in the target (5d)
+    if (this.raid && this.raid.timeLeft > 0 && this.raid.targetId === this.systemDef.id) this.spawnRaidGuards();
   }
 
   newGame(): void {
@@ -1094,6 +1103,8 @@ export class Game {
     this.occ = { systemId: OCCUPATION.START_SYSTEM, held: true, t: OCCUPATION.FLAGSHIP_BUILD, flagshipBuilt: false };
     this.pools = { ...POOLS };
     this.waypoint = null;
+    this.raid = null;
+    this.grabTarget = null; this.grabT = 0;
     this.enterSystem(SYSTEMS[0].id);
     // spawn just outside the first station, pointed into open space
     const st = this.dockables.find((d) => d.isStation)!;
@@ -1133,6 +1144,11 @@ export class Game {
     };
     this.pools = save.pools ? { ...save.pools } : { ...POOLS };
     this.waypoint = null;
+    // the ops desk keeps the raid across a reload (guards re-form on arrival, see spawnInitialPopulation)
+    this.raid = save.raid
+      ? { targetId: save.raid.targetId, timeLeft: save.raid.timeLeft, cooldown: save.raid.cooldown, grabbed: [...save.raid.grabbed], taken: save.raid.taken }
+      : null;
+    this.grabTarget = null; this.grabT = 0;
     this.enterSystem(save.system);
     // restore an in-progress hunt/transport contract (escorts do not survive a reload)
     if (save.contract) {
@@ -1198,6 +1214,11 @@ export class Game {
       // traders respawn on continue and re-draw their capital, so the saved Alliance
       // must already include their wallets (gross pools — Этап 5b)
       pools: { ...this.pools, alliance: this.pools.alliance + this.traderFloat() },
+      raid: this.raid ? {
+        targetId: this.raid.targetId, timeLeft: Math.round(this.raid.timeLeft),
+        cooldown: Math.round(this.raid.cooldown), grabbed: [...this.raid.grabbed],
+        taken: Math.round(this.raid.taken),
+      } : null,
       bossKills: this.player.bossKills,
       victoryShown: this.player.victoryShown,
       savedAt: Date.now(),
@@ -1294,6 +1315,12 @@ export class Game {
 
   dock(): void {
     if (this.sm.state !== "playing" || !this.dockTarget) return;
+    // embargo (5d): the raided system keeps its terminals shut while your window is open
+    if (this.raidHot()) {
+      this.audio.sfx("alarm");
+      this.setNews("Эмбарго: система под вашим налётом — доки закрыты, терминалы молчат. Работайте трюмом у складов.");
+      return;
+    }
     this.sm.transition("docked");
     this.audio.sfx("dock");
     this.audio.setThreat(0);
@@ -1634,6 +1661,10 @@ export class Game {
       base = c.kind === "hunt"
         ? `КОНТРАКТ · Охота ${c.done}/${c.need} · ${fmtT(c.timeLeft)}`
         : `КОНТРАКТ · ${c.kind === "transport" ? "Доставка" : "Эскорт"} → ${c.destName} · ${fmtT(c.timeLeft)}`;
+    } else if (this.raid && this.raid.timeLeft > 0) {
+      const r = this.raid;
+      base = `НАЛЁТ · ${this.systemName(r.targetId)} · складов ${r.grabbed.length} · ${fmtT(r.timeLeft)}`;
+      if (this.grabTarget) base += ` · выгрузка ${Math.min(100, Math.floor((this.grabT / RAID.GRAB_TIME) * 100))}%`;
     } else if (this.convoy) {
       base = `ТРЕВОГА · Конвой: рейдеры ${this.convoy.done}/${CONVOY.NEED} · ${fmtT(this.convoy.t)}`;
     }
@@ -1678,6 +1709,21 @@ export class Game {
         if (tough < bd) { bd = tough; best = s; }
       }
       return best ? { x: best.x, y: best.y, c: "#ff5a4a" } : null;
+    }
+    // raid op: point at the nearest full storehouse here, or at the gate leading to the target (5d)
+    if (this.raid && this.raid.timeLeft > 0) {
+      const r = this.raid;
+      if (this.systemDef.id === r.targetId) {
+        let best: Dockable | null = null, bd = Infinity;
+        for (const d of this.dockables) {
+          if (!d.isStation || r.grabbed.includes(d.id)) continue;
+          const dd = Math.hypot(d.x - p.x, d.y - p.y);
+          if (dd < bd) { bd = dd; best = d; }
+        }
+        return best ? { x: best.x, y: best.y, c: "#ff9a3a" } : null;
+      }
+      const g = this.gates.find((gg) => gg.to === r.targetId);
+      return g ? { x: g.x, y: g.y, c: "#ff9a3a" } : null;
     }
     return null;
   }
@@ -1745,6 +1791,9 @@ export class Game {
 
     /* ---- contracts + raid events ---- */
     this.updateContracts(dt);
+
+    /* ---- the player's own raid operation (5d) ---- */
+    this.updateRaid(dt);
 
     updateOrbits(this.dockables, dt);
 
@@ -1922,7 +1971,9 @@ export class Game {
     if (!this.occ.held) {
       this.occ.t -= dt;
       if (this.occ.t > 0) return;
-      const cands = SYSTEMS.filter((s) => s.id !== this.occ.systemId);
+      // the clans do not re-occupy a system the player is currently raiding (5d)
+      const cands = SYSTEMS.filter((s) => s.id !== this.occ.systemId
+        && !(this.raid && this.raid.timeLeft > 0 && this.raid.targetId === s.id));
       const pick = cands[Math.floor(this.rnd() * cands.length)];
       this.occ = { systemId: pick.id, held: true, t: OCCUPATION.FLAGSHIP_BUILD, flagshipBuilt: false };
       this.setNews(`⚑ ПИРАТЫ ЗАХВАТИЛИ СИСТЕМУ ${pick.name.toUpperCase()}! Патруль отведён, флагман сошёл на стапели.`);
@@ -1955,6 +2006,143 @@ export class Game {
     if (this.bossIdx < 0 && this.systemDef.id === this.occ.systemId && this.sm.state === "playing") {
       this.spawnBossResident();
     }
+  }
+
+  /* ================================================================== */
+  /* Raid operation (Этап 5d)                                            */
+  /* ================================================================== */
+
+  /** True while the player's raid window is open over the system they are standing in. */
+  private raidHot(): boolean {
+    return !!(this.raid && this.raid.timeLeft > 0 && this.raid.targetId === this.systemDef.id);
+  }
+
+  /**
+   * Launch a raid on a free system from the galaxy map (5d). Occupied systems
+   * hold nothing worth taking; the desk is busy while a window or cooldown runs.
+   */
+  startRaid(systemId: string): void {
+    if (this.sm.state !== "playing" || !this.ships[0].active) return;
+    if (this.raid) {
+      this.audio.sfx("alarm");
+      this.setNews(this.raid.timeLeft > 0
+        ? "Оперштаб занят: окно налёта ещё открыто."
+        : "Оперштаб остывает — следующая операция будет нескоро.");
+      return;
+    }
+    const def = SYSTEMS.find((s) => s.id === systemId);
+    if (!def) return;
+    if (this.occ.held && this.occ.systemId === systemId) {
+      this.audio.sfx("alarm");
+      this.setNews("Налёт на оккупированную систему — даром: там и так всё общее.");
+      return;
+    }
+    this.raid = { targetId: systemId, timeLeft: RAID.WINDOW, cooldown: 0, grabbed: [], taken: 0 };
+    this.grabTarget = null; this.grabT = 0;
+    const here = systemId === this.systemDef.id;
+    if (here) this.spawnRaidGuards();
+    this.audio.sfx("alarm");
+    this.setNews(`⚔ НАЛЁТ НА ${def.name.toUpperCase()}: ${Math.round(RAID.WINDOW / 60)} мин, чтобы опустошить склады станций (${RAID.GRAB_TIME} с у причала). ${here ? "Вы уже здесь — охрана поднимается по тревоге!" : "Прыгайте в врата — окно уже идёт."}`);
+    this.pushHud();
+    if (this.mapOpen) this.pushMap();
+    this.saveNow();
+  }
+
+  /** Patrol cordon thrown up around every station of the target while the window is open. */
+  private spawnRaidGuards(): void {
+    for (const d of this.dockables) {
+      if (!d.isStation) continue;
+      for (let k = 0; k < RAID.GUARDS_PER_STATION; k++) {
+        const idx = this.spawnShip("patrol", d.x + (this.rnd() - 0.5) * 1400, d.y + (this.rnd() - 0.5) * 1400);
+        if (idx >= 0) this.ships[idx].raidGuard = true;
+      }
+    }
+  }
+
+  /** Window timer, storehouse hovering, cooldown. Contract/convoy logic is untouched by jumps — the op is galaxy-wide. */
+  private updateRaid(dt: number): void {
+    const r = this.raid;
+    if (!r) return;
+    if (r.timeLeft <= 0) {
+      r.cooldown -= dt;
+      if (r.cooldown <= 0) this.raid = null; // the ops desk is clear — the map lights the button up again
+      return;
+    }
+    r.timeLeft -= dt;
+    if (this.sm.state === "playing" && this.systemDef.id === r.targetId) {
+      const p = this.ships[0];
+      const spd = Math.hypot(p.vx, p.vy);
+      const near = spd < WORLD_CFG.DOCK_MAX_SPEED ? findDockTarget(this.dockables, p.x, p.y) : null;
+      const d = near && near.isStation && !r.grabbed.includes(near.id) ? near : null;
+      if (d) {
+        if (this.grabTarget !== d.id) { this.grabTarget = d.id; this.grabT = 0; }
+        this.grabT += dt;
+        if (this.grabT >= RAID.GRAB_TIME) this.grabStorehouse(d);
+      } else {
+        this.grabTarget = null; this.grabT = 0;
+      }
+    } else {
+      this.grabTarget = null; this.grabT = 0;
+    }
+    if (r.timeLeft <= 0) this.endRaid();
+  }
+
+  /** Empty one storehouse: three treasuries pay at once — strongbox, customs payroll, caravan funds. */
+  private grabStorehouse(d: Dockable): void {
+    const r = this.raid;
+    if (!r) return;
+    const def = SYSTEMS.find((s) => s.id === r.targetId) ?? this.systemDef;
+    const pl = def.priceLevel; // trophies ∝ the target's market wealth
+    let total = 0;
+    total += this.gain(Math.max(RAID.LOOT_MIN.stations, RAID.LOOT.stations * Math.max(0, this.pools.stations)) * pl, "stations");
+    total += this.gain(Math.max(RAID.LOOT_MIN.patrol, RAID.LOOT.patrol * Math.max(0, this.pools.patrol)) * pl, "patrol");
+    total += this.gain(Math.max(RAID.LOOT_MIN.alliance, RAID.LOOT.alliance * Math.max(0, this.pools.alliance)) * pl, "alliance");
+    r.grabbed.push(d.id);
+    r.taken += total;
+    this.player.earned += total;
+    this.grabTarget = null; this.grabT = 0;
+    // embargo: the raids spook trade — every market in the system sags
+    for (const dd of this.dockables) for (const g of GOODS) this.pushFluct(dd, g.id, -RAID.EMBARGO_PUSH);
+    if (r.grabbed.length === 1) {
+      this.addRep(RAID.REP_HIT);
+      this.player.outlaw = true; // open piracy: patrol shoots on sight until pardoned or fined
+      this.audio.sfx("alarm");
+      this.setNews(`⚔ Склад ${d.name} опустошен: +₡${total.toLocaleString("ru-RU")}. Патруль объявил вас пиратом — с этого момента вас ищут!`);
+    } else {
+      this.audio.sfx("credits");
+      this.setNews(`⚔ Склад ${d.name} опустошен: +₡${total.toLocaleString("ru-RU")}.`);
+    }
+    this.pushHud();
+    this.saveNow();
+  }
+
+  /** The window closed: escorts stand down, the operation desk cools off. */
+  private endRaid(reason?: string): void {
+    const r = this.raid;
+    if (!r) return;
+    for (let i = 1; i < MAX_SHIPS; i++) {
+      const s = this.ships[i];
+      if (s.active && s.raidGuard) this.freeShip(i);
+    }
+    this.grabTarget = null; this.grabT = 0;
+    this.raid = { targetId: r.targetId, timeLeft: 0, cooldown: RAID.COOLDOWN, grabbed: r.grabbed, taken: r.taken };
+    this.setNews(reason
+      ?? (r.grabbed.length
+        ? `Операция завершена: складов ${r.grabbed.length}, добыча ₡${Math.round(r.taken).toLocaleString("ru-RU")}. Оперштаб остывает ${Math.round(RAID.COOLDOWN / 60)} мин.`
+        : "Окно налёта закрыто — склады целы. Оперштаб остывает."));
+    this.saveNow();
+    this.pushHud();
+    if (this.mapOpen) this.pushMap();
+  }
+
+  /** Rough per-storehouse take in a system — the map's raid forecast (5d). */
+  private raidEstFor(def: SystemDef): number {
+    return Math.round(
+      (Math.max(RAID.LOOT_MIN.stations, RAID.LOOT.stations * Math.max(0, this.pools.stations))
+        + Math.max(RAID.LOOT_MIN.patrol, RAID.LOOT.patrol * Math.max(0, this.pools.patrol))
+        + Math.max(RAID.LOOT_MIN.alliance, RAID.LOOT.alliance * Math.max(0, this.pools.alliance)))
+      * def.priceLevel,
+    );
   }
 
   /** Aim angle: mouse cursor on desktop; auto-target nearest hostile on touch. */
@@ -2494,6 +2682,15 @@ export class Game {
         ctx.arc(x, y, scale / 2 + 10, 0, Math.PI * 2);
         ctx.stroke();
       }
+      // raid heist: an orange arc closing over the storehouse being emptied (5d)
+      if (this.grabTarget === d.id && this.raid && this.raid.timeLeft > 0) {
+        const frac = Math.max(0, Math.min(1, this.grabT / RAID.GRAB_TIME));
+        ctx.strokeStyle = "#ff9a3a";
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.arc(x, y, scale / 2 + 16, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2);
+        ctx.stroke();
+      }
     }
 
     /* hyperspace gates — additive event horizon behind slowly counter-rotating arcs */
@@ -2734,7 +2931,8 @@ export class Game {
       wanted: this.patrolHostile(),
       pardons: this.player.pardons,
       systemName: this.systemDef.name,
-      dockName: this.dockTarget && this.sm.state === "playing" ? this.dockTarget.name : null,
+      // under the raid embargo the terminal prompt is replaced by the operation line (5d)
+      dockName: this.dockTarget && this.sm.state === "playing" && !this.raidHot() ? this.dockTarget.name : null,
       gateName: this.jumpGate && this.sm.state === "playing" ? this.jumpGate.name : null,
       bossActive: !!(boss && boss.active),
       bossHp: boss ? Math.max(0, Math.round(boss.hp + boss.shield)) : 0,
@@ -2843,7 +3041,12 @@ export class Game {
         occupied: this.occ.held && this.occ.systemId === s.id,
         flagship: this.occ.held && this.occ.systemId === s.id && this.occ.flagshipBuilt,
         current: s.id === this.systemDef.id,
+        raidEst: this.raidEstFor(s),
       })),
+      raid: this.raid ? {
+        targetId: this.raid.targetId, timeLeft: Math.max(0, Math.ceil(this.raid.timeLeft)),
+        cooldown: Math.max(0, Math.ceil(this.raid.cooldown)), grabbed: this.raid.grabbed.length,
+      } : null,
       currentId: this.systemDef.id,
       layouts: SYSTEMS.map((s) => ({
         id: s.id,
@@ -2953,6 +3156,7 @@ export class Game {
       closeMap: () => this.closeMap(),
       setWaypoint: (kind, id) => this.setWaypoint(kind, id),
       clearWaypoint: () => this.clearWaypoint(),
+      startRaid: (id) => this.startRaid(id),
     };
     gameApi.current = api;
     // debug bridge for external automation (same contract family as __gameProbe): the live
@@ -2992,6 +3196,26 @@ export class Game {
       strength: this.pirateStrength(),
       setFund: (v: number) => { this.pools.clan = Math.max(-PIRATE_ECON.DEBT_LIMIT, Math.min(MONEY_TOTAL, v)); },
     });
+    // raid operation probe (Этап 5d): read the ops desk, launch, and park the player
+    // by a dock (non-simulating teleport for live checks — heist range requires proximity)
+    (window as unknown as Record<string, unknown>).__raidOps = {
+      get state() {
+        const r = self.raid;
+        return r ? { targetId: r.targetId, timeLeft: r.timeLeft, cooldown: r.cooldown, grabbed: [...r.grabbed], taken: r.taken } : null;
+      },
+      start: (id: string) => self.startRaid(id),
+      park: (dockableId?: string) => {
+        const d = dockableId
+          ? self.dockables.find((dd) => dd.id === dockableId)
+          : self.dockables.find((dd) => dd.isStation && !(self.raid?.grabbed.includes(dd.id))) ?? self.dockables.find((dd) => dd.isStation);
+        if (!d) return null;
+        const p = self.ships[0];
+        p.x = d.x + d.radius + WORLD_CFG.DOCK_MARGIN * 0.5; p.y = d.y;
+        p.vx = 0; p.vy = 0;
+        self.camX = p.x; self.camY = p.y;
+        return { x: p.x, y: p.y, dock: d.id };
+      },
+    };
     window.__gameProbe = () => {
       const p = this.ships[0];
       // contract with scripts/verify-game.mjs: W (up-screen, +y world) must decrease probe z

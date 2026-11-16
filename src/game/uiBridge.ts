@@ -45,7 +45,11 @@ export interface MapSnapshot {
   systems: {
     id: string; name: string; profile: string; desc: string; priceLevel: number;
     occupied: boolean; flagship: boolean; current: boolean;
+    /** Rough per-storehouse take a raid here would yield (Этап 5d forecast). */
+    raidEst: number;
   }[];
+  /** Raid operation on the ops desk (5d), null = the desk is clear. */
+  raid: { targetId: string; timeLeft: number; cooldown: number; grabbed: number } | null;
   currentId: string;
   /** Static body/gate layout per system (seeded, identical to the live world at t=0). */
   layouts: {
@@ -195,6 +199,8 @@ export interface GameApi {
   setWaypoint(kind: "dockable" | "gate", id: string): void;
   /** Clear the active waypoint. */
   clearWaypoint(): void;
+  /** Launch a raid operation on a free system (Этап 5d). */
+  startRaid(systemId: string): void;
 }
 
 export const gameApi: { current: GameApi | null } = { current: null };

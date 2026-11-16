@@ -285,6 +285,39 @@ export function StarMap({ map }: { map: MapSnapshot }) {
           </div>
         )}
         <div className={`sm-status ${st.cls}`}>{st.text}</div>
+        {(() => {
+          const r = map.raid
+          const nameOf = (id: string) => map.systems.find((s) => s.id === id)?.name ?? id
+          if (r && r.timeLeft > 0 && r.targetId === sel.id) {
+            return (
+              <div className="sm-meta bad">
+                ⚔ ОПЕРАЦИЯ ИДЁТ · {mmss(r.timeLeft)} · складов взято {r.grabbed}
+              </div>
+            )
+          }
+          if (sel.occupied) {
+            return <div className="sm-meta">Налёт здесь нечего брать — у кланов общий котёл.</div>
+          }
+          if (r && r.timeLeft > 0) {
+            return (
+              <button className="btn btn-small" disabled>
+                ⚔ Идёт операция: {nameOf(r.targetId)} · {mmss(r.timeLeft)}
+              </button>
+            )
+          }
+          if (r && r.cooldown > 0) {
+            return (
+              <button className="btn btn-small" disabled>
+                Оперштаб остывает · {mmss(r.cooldown)}
+              </button>
+            )
+          }
+          return (
+            <button className="btn btn-small" onClick={() => gameApi.current?.startRaid(sel.id)}>
+              ⚔ Налёт на {sel.name} · ≈₡{sel.raidEst.toLocaleString('ru-RU')}/склад
+            </button>
+          )
+        })()}
         <button
           className="btn btn-small"
           onClick={() => { setViewId(sel.id); setTab('system') }}
@@ -295,7 +328,7 @@ export function StarMap({ map }: { map: MapSnapshot }) {
 
       <div className="sm-hint">
         {tab === 'galaxy'
-          ? 'Клик по узлу — сводка системы. Красный — оккупирован.'
+          ? 'Клик по узлу — сводка и налёт. Красный — оккупирован.'
           : viewId === map.currentId
             ? hint ?? 'Клик по станции, планете или вратам — проложить курс.'
             : 'Чужая система — схема для планирования прыжка.'}

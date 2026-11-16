@@ -161,6 +161,38 @@ export const PIRATE_ECON = {
 } as const;
 
 /* ------------------------------------------------------------------ */
+/* Raid operation (Этап 5d: налёт — операция с карты)                   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The player turns pirate: pick a free system on the galaxy map and run an
+ * operation — an open window to empty station storehouses (hover the dock,
+ * slow) while patrol escorts hunt and every terminal in the system is on
+ * embargo. Each take drains three treasuries at once: the station strongbox
+ * (stations), the customs payroll (patrol) and caravan funds (alliance) —
+ * scaled by the target's market wealth and clamped to what each actually
+ * holds, so a galaxy the player has already bled pays ever less (auto-brake).
+ */
+export const RAID = {
+  /** Operation window from launch (seconds) — about three minutes of mayhem. */
+  WINDOW: 180,
+  /** Operation-desk cooldown before the next raid can be launched (seconds). */
+  COOLDOWN: 240,
+  /** Seconds of hovering the dock to empty one storehouse. */
+  GRAB_TIME: 6,
+  /** Take per storehouse per pool: fraction of the pool, × priceLevel of the target. */
+  LOOT: { stations: 0.013, patrol: 0.009, alliance: 0.0046 },
+  /** Floors so even a bled-dry galaxy pays a little for the risk. */
+  LOOT_MIN: { stations: 700, patrol: 350, alliance: 250 },
+  /** Standing cost of hitting a civilian system; the first take also brands the player outlaw. */
+  REP_HIT: { patrol: -12, trader: -10 },
+  /** Patrol escorts thrown up around every station of the target while the window is open. */
+  GUARDS_PER_STATION: 2,
+  /** Each take sags every market price in the system by this fluct push (embargo bites prices). */
+  EMBARGO_PUSH: 0.12,
+} as const;
+
+/* ------------------------------------------------------------------ */
 /* Economy                                                             */
 /* ------------------------------------------------------------------ */
 
