@@ -2009,7 +2009,9 @@ export class Game {
       // the clans do not re-occupy a system the player is currently raiding (5d)
       const cands = SYSTEMS.filter((s) => s.id !== this.occ.systemId
         && !(this.raid && this.raid.timeLeft > 0 && this.raid.targetId === s.id));
-      const pick = cands[Math.floor(this.rnd() * cands.length)];
+      // Каркинос — родовая крепость кланов: за новым плацдармом половина бросков ведёт именно туда
+      const kar = cands.find((s) => s.id === "kar");
+      const pick = kar && this.rnd() < 0.5 ? kar : cands[Math.floor(this.rnd() * cands.length)];
       this.occ = { systemId: pick.id, held: true, t: OCCUPATION.FLAGSHIP_BUILD, flagshipBuilt: false };
       this.setNews(`⚑ ПИРАТЫ ЗАХВАТИЛИ СИСТЕМУ ${pick.name.toUpperCase()}! Патруль отведён, флагман сошёл на стапели.`);
       this.audio.sfx("alarm");
@@ -2258,7 +2260,9 @@ export class Game {
     }
     const pirateCap = this.pirateStrength();
     if (pirates < pirateCap) this.spawnAtEdge("pirate");
-    if (!this.hereOccupied() && patrols < POPULATION.PATROLS) this.spawnAtEdge("patrol");
+    // constabulary strength is per system: Aurora floods the band, Kar kinoks keeps it thin
+    const patrolCap = POPULATION.PATROLS + (this.systemDef.patrolBoost ?? 0);
+    if (!this.hereOccupied() && patrols < patrolCap) this.spawnAtEdge("patrol");
     if (traders < POPULATION.TRADERS) this.spawnAtEdge("trader");
   }
 
@@ -3335,6 +3339,15 @@ export class Game {
         self.camX = p.x; self.camY = p.y;
       },
       count: (faction: string) => this.ships.filter((s) => s.active && s.faction === faction).length,
+      // jump straight to a system (probe tour of the whole graph), reporting layout + money invariant
+      jump: (sysId: string) => {
+        self.jumpTo(sysId);
+        const a = self.econAudit();
+        return {
+          sys: self.systemDef.id, gates: self.gates.length, delta: a.delta,
+          bodies: self.dockables.length, pirates: self.ships.filter((s) => s.active && s.faction === "pirate").length,
+        };
+      },
       get playing() { return self.sm.state === "playing"; },
       // game-feel layer probes: popup/feed counts, a popup at the player, a hull setter for the vignette
       feel: {

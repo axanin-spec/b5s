@@ -395,6 +395,8 @@ export interface SystemDef {
   priceLevel: number;
   /** Extra pirates kept alive by the spawner. */
   pirateBoost: number;
+  /** Extra patrol hulls on station (Aurora's beefed-up constabulary, negative for clan turf). */
+  patrolBoost?: number;
   /** Human-readable economic specialization shown on the map and in the terminal. */
   profileName: string;
   /**
@@ -423,6 +425,24 @@ export const SYSTEMS: readonly SystemDef[] = [
     priceLevel: 0.9, pirateBoost: 6,
     profileName: "Аграрный фронтир",
     profileMods: { food: 0.62, ore: 1.15, meds: 1.2, tech: 1.25, lux: 0.9, arms: 1.08 },
+  },
+  {
+    id: "terminus", name: "Терминус", seed: 0x7E8014, desc: "Руины верфей: дешёвый хабарь, среди обломков прячутся пираты",
+    priceLevel: 0.82, pirateBoost: 4,
+    profileName: "Руины-хабарь",
+    profileMods: { food: 1.28, ore: 0.78, meds: 1.12, tech: 0.68, lux: 0.95, arms: 1.05 },
+  },
+  {
+    id: "aurora", name: "Аврора", seed: 0xA00A01, desc: "Финансовое ядро: богатый рынок, сильный патруль, мало пиратов",
+    priceLevel: 1.25, pirateBoost: -2, patrolBoost: 3,
+    profileName: "Финансовое ядро",
+    profileMods: { food: 1.22, ore: 1.24, meds: 0.85, tech: 0.88, lux: 1.25, arms: 1.15 },
+  },
+  {
+    id: "kar", name: "Каркинос", seed: 0xCA4C15, desc: "Крепость кланов: дешёвые оружие и трофеи, любимая вотчина пиратов",
+    priceLevel: 1.18, pirateBoost: 5, patrolBoost: -1,
+    profileName: "Крепость кланов",
+    profileMods: { food: 1.1, ore: 1.05, meds: 1.18, tech: 1.0, lux: 1.22, arms: 0.72 },
   },
 ] as const;
 
