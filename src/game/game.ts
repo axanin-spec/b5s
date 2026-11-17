@@ -1595,7 +1595,13 @@ export class Game {
     this.player.ship = id;
     const slots = this.hullDef().slots;
     const fit = (cat: EquipCat): (string | null)[] => {
-      const kept: (string | null)[] = this.player.installed[cat].filter((x): x is string => !!x && !!EQUIP[x] && EQUIP[x].ships.includes(id));
+      // не влезший в новый корпус фит уезжает на склад, а не сгорает; битые id — в утиль
+      const kept: (string | null)[] = [];
+      for (const x of this.player.installed[cat]) {
+        if (!x) continue;
+        if (EQUIP[x]?.ships.includes(id)) kept.push(x);
+        else if (EQUIP[x]) this.player.stash.push(x);
+      }
       while (kept.length > slots[cat]) this.player.stash.push(kept.pop()!);
       while (kept.length < slots[cat]) kept.push(null);
       return kept;
@@ -3850,6 +3856,25 @@ export class Game {
         if (!EQUIP[itemId]) return false;
         this.player.stash.push(itemId);
         return true;
+      },
+      // 7b probes: нейтральная по инварианту накачка денег (станции ↔ игрок),
+      // список станций системы и мгновенная стыковка (гейты dock() не обходит)
+      cash: (v: number) => {
+        const d = Math.round(v - this.player.credits);
+        if (d > 0) this.gain(d, "stations");
+        else if (d < 0) this.pay(-d, "stations");
+        return this.player.credits;
+      },
+      stations: () => this.dockables.filter((d) => d.isStation).map((d) => ({ id: d.id, kind: d.kind, name: d.name })),
+      dockAt: (id: string) => {
+        const d = this.dockables.find((x) => x.isStation && (x.id === id || x.kind === id));
+        if (!d) return false;
+        if (this.sm.state === "docked") this.undock();
+        const p = this.ships[0];
+        p.x = d.x; p.y = d.y; p.vx = 0; p.vy = 0;
+        this.update(GameLoop.STEP); // проверка дистанции выставит dockTarget
+        this.dock();
+        return this.sm.state === "docked";
       },
     };
     window.__gameProbe = () => {
