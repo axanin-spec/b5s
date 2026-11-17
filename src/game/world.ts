@@ -2,7 +2,7 @@
  * world.ts — star system generation (seeded), orbital motion and the living market.
  */
 
-import { ECONOMY, GOODS, KIND_MODS, STATION_KIND_NAMES, WORLD_CFG } from "./config";
+import { ECONOMY, GOODS, KIND_MODS, PIRATE_BRANCH, STATION_KIND_NAMES, WORLD_CFG } from "./config";
 import { mulberry32 } from "./textures";
 import type { Dockable, StationKind } from "./types";
 
@@ -21,7 +21,7 @@ const STATION_DEFS: { name: string; kind: StationKind }[] = [
   { name: "Станция «Наука»", kind: "science" },
 ];
 
-export function generateWorld(seed: number, priceLevel = 1, sysMods: Record<string, number> = {}): Dockable[] {
+export function generateWorld(seed: number, priceLevel = 1, sysMods: Record<string, number> = {}, withLair = false): Dockable[] {
   const rnd = mulberry32(seed);
   const dockables: Dockable[] = [];
 
@@ -72,6 +72,26 @@ export function generateWorld(seed: number, priceLevel = 1, sysMods: Record<stri
       eventT: 0,
     });
   });
+
+  // the smuggler lair (Этап 6c): an unlicensed station parked on a far orbit of Терминус
+  if (withLair) {
+    dockables.push({
+      id: PIRATE_BRANCH.LAIR.id,
+      name: PIRATE_BRANCH.LAIR.name,
+      kind: "hub",
+      isStation: true,
+      orbit: WORLD_CFG.PLANETS[WORLD_CFG.PLANETS.length - 1].orbit + 170,
+      angle: Math.PI * 1.17,
+      angVel: 0.0016,
+      x: 0, y: 0,
+      radius: WORLD_CFG.STATION_RADIUS,
+      sysMods,
+      market: {},
+      fluct: initFluct(),
+      eventGood: null,
+      eventT: 0,
+    });
+  }
 
   updateOrbits(dockables, 0);
   refreshAllPrices(dockables);

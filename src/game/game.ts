@@ -360,10 +360,10 @@ export class Game {
   }
 
   /** Rebuild dockables + their textures for a fresh (or restored) world. */
-  private newWorld(seed: number, priceLevel = 1, sysMods: Record<string, number> = {}): void {
+  private newWorld(seed: number, priceLevel = 1, sysMods: Record<string, number> = {}, withLair = false): void {
     this.seed = seed >>> 0;
     this.rnd = mulberry32(this.seed ^ 0x51f7);
-    this.dockables = generateWorld(this.seed, priceLevel, sysMods);
+    this.dockables = generateWorld(this.seed, priceLevel, sysMods, withLair);
     this.dockTex = this.dockables.map((d) =>
       d.isStation ? makeStationTexture(d.kind, this.seed + d.orbit) : makePlanetTexture(d.kind, this.seed + d.orbit));
     this.dockSpin = this.dockables.map(() => this.rnd() * Math.PI * 2);
@@ -401,7 +401,11 @@ export class Game {
   private enterSystem(systemId: string, arrivalFromId?: string): void {
     this.systemDef = SYSTEMS.find((s) => s.id === systemId) ?? SYSTEMS[0];
     this.audio.setSystem(this.systemDef.id); // crossfade to this system's theme
-    this.newWorld(this.systemDef.seed, this.systemDef.priceLevel, this.systemDef.profileMods);
+    // Терминус always hosts the smuggler lair (Этап 6c) — kin turf, occupation or not
+    this.newWorld(
+      this.systemDef.seed, this.systemDef.priceLevel, this.systemDef.profileMods,
+      this.systemDef.id === PIRATE_BRANCH.LAIR_SYSTEM,
+    );
     // one gate per destination, spread symmetrically, angle offset by the seed
     const others = SYSTEMS.filter((s) => s.id !== systemId);
     const base = ((this.systemDef.seed % 360) * Math.PI) / 180;
@@ -1277,9 +1281,9 @@ export class Game {
     this.pools[pool] += spent;
   }
 
-  /** Treasury a docked trade runs through: smuggler cash in an occupied system, civilian capital elsewhere. */
+  /** Treasury a docked trade runs through: smuggler cash on clan turf, civilian capital elsewhere. */
   private tradePool(): PoolId {
-    return this.dockTarget && this.hereOccupied() ? "clan" : "stations";
+    return this.dockTarget && (this.hereOccupied() || this.dockTarget.id === PIRATE_BRANCH.LAIR.id) ? "clan" : "stations";
   }
 
   /** Player's share of the galaxy's fixed credit mass (0..1) — the economic victory meter. */
@@ -1372,9 +1376,17 @@ export class Game {
       this.setNews("Эмбарго: система под вашим налётом — доки закрыты, терминалы молчат. Работайте трюмом у складов.");
       return;
     }
-    // pirate status (5f): law-abiding worlds don't board a wanted captain; the clans'
-    // black market in the occupied system is the only terminal that takes you
-    if (this.isPirate() && !this.hereOccupied()) {
+    // the lair (6c): unlicensed ink only docks kin and trusted friends — everyone
+    // else gets a polite riddle and a closed boom
+    if (this.dockTarget.id === PIRATE_BRANCH.LAIR.id) {
+      if (!this.isPirate() && this.player.rep.clan < REP.FRIENDLY) {
+        this.audio.sfx("alarm");
+        this.setNews("«Расколотый кокон» не принимает незнакомцев: «Прилетай, когда кланы назовут тебя своим».");
+        return;
+      }
+    } else if (this.isPirate() && !this.hereOccupied()) {
+      // pirate status (5f): law-abiding worlds don't board a wanted captain; the clans'
+      // black market in the occupied system is the only terminal that takes you
       this.audio.sfx("alarm");
       this.setNews("Вас не принимают: вы в розыске. Живой товар — на чёрном рынке оккупированной системы.");
       return;
@@ -1478,14 +1490,23 @@ export class Game {
     this.pushHud();
   }
 
+  /** The repair bill; the lair's docks are unlicensed — repairs cost less there (6c). */
+  private repairCost(): number {
+    const p = this.ships[0];
+    const missing = Math.max(0, Math.ceil(p.maxHp - p.hp));
+    const lair = this.dockTarget?.id === PIRATE_BRANCH.LAIR.id;
+    return Math.ceil(missing * REPAIR_COST_PER_HP * (lair ? PIRATE_BRANCH.LAIR.REPAIR_FACTOR : 1));
+  }
+
   repair(): void {
     if (this.sm.state !== "docked") return;
     const p = this.ships[0];
     const missing = Math.ceil(p.maxHp - p.hp);
     if (missing <= 0) return;
-    const cost = missing * REPAIR_COST_PER_HP;
+    const cost = this.repairCost();
     if (this.player.credits < cost) return;
-    this.pay(cost, "stations");
+    // smuggler hands take smuggler coin
+    this.pay(cost, this.dockTarget?.id === PIRATE_BRANCH.LAIR.id ? "clan" : "stations");
     p.hp = p.maxHp;
     this.audio.sfx("upgrade");
     this.pushStation();
@@ -1585,8 +1606,9 @@ export class Game {
   /** One offer of each kind per docking; the broker restocks every undock. */
   private genOffers(here: Dockable): void {
     this.offers = [];
-    // licensed brokers don't work in pirate space — there the clans post their own board (6b)
-    if (this.hereOccupied()) { this.genClanOffers(here); return; }
+    // licensed brokers don't work in pirate space — there the clans post their own board (6b),
+    // and the lair keeps its own board too (6c)
+    if (this.hereOccupied() || here.id === PIRATE_BRANCH.LAIR.id) { this.genClanOffers(here); return; }
     const others = this.dockables.filter((d) => d.id !== here.id);
     if (others.length === 0) return;
     const jit = (base: number) => Math.round((base * (1 + (this.rnd() * 2 - 1) * CONTRACTS.JITTER)) / 50) * 50;
@@ -1650,7 +1672,10 @@ export class Game {
       need: k, goodId: "", qty: 0, destId: "", destName: "",
     });
 
-    const others = this.dockables.filter((d) => d.id !== here.id);
+    // at the lair a wanted captain has nowhere to deliver: Alliance docks refuse him,
+    // so the smuggling run only posts when the client can legally dock (6c)
+    const atLair = here.id === PIRATE_BRANCH.LAIR.id;
+    const others = atLair && this.isPirate() ? [] : this.dockables.filter((d) => d.id !== here.id);
     if (others.length > 0) {
       const dest = others[Math.floor(this.rnd() * others.length)];
       const g = GOODS[Math.floor(this.rnd() * GOODS.length)];
@@ -3203,7 +3228,8 @@ export class Game {
     const station: StationSnapshot = {
       id: d.id,
       name: d.name,
-      kindName: (d.isStation ? "Орбитальная станция · " : "Планета · ") + kindName(d.kind),
+      kindName: d.id === PIRATE_BRANCH.LAIR.id ? "Контрабандистская база"
+        : (d.isStation ? "Орбитальная станция · " : "Планета · ") + kindName(d.kind),
       systemProfile: `Система ${this.systemDef.name} · ${this.systemDef.profileName}`,
       occupied,
       eventGood: d.eventGood,
@@ -3213,13 +3239,13 @@ export class Game {
       cargoMax: this.cargoMax(),
       credits: Math.round(this.player.credits),
       hull: Math.max(0, Math.round(p.hp)), maxHull: Math.round(p.maxHp),
-      repairCost: Math.ceil(p.maxHp - p.hp) * REPAIR_COST_PER_HP,
+      repairCost: this.repairCost(),
       reputation: { ...this.player.rep },
       fineCost: this.fineCost(),
       wanted: this.patrolHostile(),
       outlaw: this.player.outlaw,
       pardons: this.player.pardons,
-      priceNote: occupied ? (this.player.rep.clan >= REP.FRIENDLY
+      priceNote: (occupied || d.id === PIRATE_BRANCH.LAIR.id) ? (this.player.rep.clan >= REP.FRIENDLY
         ? "Чёрный рынок: вы здесь «свой» — берут дешевле, платят жирнее"
         : this.player.rep.clan <= REP.UNFRIENDLY
           ? "Чёрный рынок: кланы вам не доверяют — цены впритык"
@@ -3256,7 +3282,7 @@ export class Game {
   private systemLayout(def: SystemDef): Dockable[] {
     let w = this.layoutCache.get(def.id);
     if (!w) {
-      w = generateWorld(def.seed, def.priceLevel, def.profileMods);
+      w = generateWorld(def.seed, def.priceLevel, def.profileMods, def.id === PIRATE_BRANCH.LAIR_SYSTEM);
       this.layoutCache.set(def.id, w);
     }
     return w;
@@ -3293,7 +3319,9 @@ export class Game {
         id: s.id,
         bodies: this.systemLayout(s).map((d) => ({
           id: d.id, x: d.x / HALF, y: d.y / HALF, r: Math.max(0.012, d.radius / HALF),
-          c: d.isStation ? "#7fd0ff" : "#8fd08f", label: d.name, station: d.isStation,
+          // the lair glows purple on the chart like every other clan thing
+          c: d.id === PIRATE_BRANCH.LAIR.id ? "#d26aff" : d.isStation ? "#7fd0ff" : "#8fd08f",
+          label: d.name, station: d.isStation,
         })),
         gates: this.gatesFor(s).map((g) => ({ x: g.x / HALF, y: g.y / HALF, to: g.to, name: g.name })),
       })),
@@ -3543,7 +3571,7 @@ export class Game {
     for (const d of this.dockables) {
       out.push({
         x: d.x / HALF, y: d.y / HALF,
-        c: d.isStation ? "#7fd0ff" : "#8fd08f",
+        c: d.id === PIRATE_BRANCH.LAIR.id ? "#d26aff" : d.isStation ? "#7fd0ff" : "#8fd08f",
         s: d.isStation ? 3 : 4,
       });
     }
