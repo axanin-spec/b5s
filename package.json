@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "verify": "node scripts/verify-game.mjs",
     "balance": "node scripts/balance-test.mjs",
-    "fleet": "node scripts/fleet-test.mjs"
+    "fleet": "node scripts/fleet-test.mjs",
+    "focus": "node scripts/focus-test.mjs"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.17.3",

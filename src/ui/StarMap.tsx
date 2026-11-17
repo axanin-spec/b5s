@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { gameApi, type MapSnapshot } from '@/game/uiBridge'
 
-/** Fixed galaxy positions for the three chart nodes (canvas fractions). */
+/** Fixed galaxy positions for the six chart nodes (canvas fractions), hexagonal ring. */
 const GAL_POS: Record<string, [number, number]> = {
-  eidolon: [0.26, 0.52],
-  kronos: [0.74, 0.2],
-  nix: [0.74, 0.8],
+  eidolon: [0.5, 0.135],
+  aurora: [0.85, 0.31],
+  kronos: [0.85, 0.69],
+  nix: [0.5, 0.865],
+  terminus: [0.15, 0.69],
+  kar: [0.15, 0.31],
 }
 
 function mmss(sec: number): string {
@@ -30,7 +33,7 @@ function statusLine(map: MapSnapshot, id: string): { text: string; cls: string }
 }
 
 /**
- * Star chart overlay (M): «Галактика» — the three systems, their specialization and
+ * Star chart overlay (M): «Галактика» — all six systems, their specialization and
  * the pirate front; «Система» — schematic of any system, click a body or a gate in
  * the current one to plot a course. Live, non-modal — the world ticks on behind.
  */
@@ -54,8 +57,8 @@ export function StarMap({ map }: { map: MapSnapshot }) {
     ctx.clearRect(0, 0, S, S)
 
     if (tab === 'galaxy') {
-      // jump lanes: every system links every other (one gate per neighbour)
-      ctx.strokeStyle = 'rgba(140,190,220,0.25)'
+      // jump lanes: every system links every other (one gate per neighbour) — faint full mesh
+      ctx.strokeStyle = 'rgba(140,190,220,0.12)'
       ctx.lineWidth = 1
       const ids = m.systems.map((s) => s.id)
       for (let i = 0; i < ids.length; i++) {

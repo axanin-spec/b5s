@@ -789,7 +789,11 @@ export class Game {
   }
 
   /** Player volley (Этап 7): every mounted gun fires its own spread; no guns → emergency pulse. */
+  /** Выстрелы игрока — только для автопроб (окно __input), на геймплей не влияет. */
+  private shotsFired = 0;
+
   private playerFire(angle: number): void {
+    this.shotsFired++;
     const guns = this.guns();
     if (guns.length === 0) {
       this.fireBolt(0, angle, EMERGENCY_PULSE.dmg, BOLT_CFG.SPEED);
@@ -2290,7 +2294,10 @@ export class Game {
 
     /* ---- player fire ---- */
     p.fireCooldown -= dt;
-    if (this.input.firing && p.fireCooldown <= 0) {
+    // tap — одиночный выстрел с клика, чей mousedown съела активация окна (см. input.ts);
+    // берём каждый кадр, чтобы «банкованный» тап не выстрелил позже сам по себе
+    const tap = this.input.consumeTap();
+    if ((tap || this.input.firing) && p.fireCooldown <= 0) {
       const aim = this.aimAngle() ?? p.angle;
       this.playerFire(aim);
       p.fireCooldown = 1 / this.gunRate();
@@ -3882,6 +3889,15 @@ export class Game {
       // contract with scripts/verify-game.mjs: W (up-screen, +y world) must decrease probe z
       return { x: p.x, y: 0, z: -p.y };
     };
+    // мышиный фокус-фикс (6b-хвост): состояние ввода + счётчик выстрелов для probes
+    (window as unknown as Record<string, unknown>).__input = () => ({
+      mouseDown: this.input.mouseDown,
+      spaceHeld: this.input.spaceHeld,
+      touchFiring: this.input.touchFiring,
+      firing: this.input.firing,
+      shots: this.shotsFired,
+      hasFocus: document.hasFocus(),
+    });
   }
 
   private minimapData(): { x: number; y: number; c: string; s: number; o?: 1; w?: 1 }[] {

@@ -46,6 +46,8 @@ export class Input {
   private held = new Set<string>();
   private touchMoveId: number | null = null;
   private touchMoveOrigin = { x: 0, y: 0 };
+  /** One shot banked from a click whose mousedown was swallowed (focus activation). */
+  private pendingTap = false;
 
   /** Listener teardown — collected at construction so dispose() can unwind every subscription. */
   private unsubscribe: Array<() => void> = [];
@@ -91,12 +93,26 @@ export class Input {
       }
     });
     // Fire only when the press starts on the canvas itself — UI buttons above the canvas
-    // must not trigger weapons.
-    on<MouseEvent>(target, "mousedown", (e) => {
-      if (e.button === 0) this.mouseDown = true;
+    // must not trigger weapons. Pointer capture binds the release to the canvas even when
+    // the cursor escapes the window: without it mouseup is lost and the guns stick ON.
+    on<PointerEvent>(target, "pointerdown", (e) => {
+      if (e.pointerType !== "mouse" || e.button !== 0) return;
+      this.mouseDown = true;
+      try { target.setPointerCapture(e.pointerId); } catch { /* already captured */ }
+    });
+    // The cursor came back over the canvas with the button still held — the press began
+    // "outside" (another pane, another monitor) or the embed swallowed the activation
+    // mousedown; resume firing instead of waiting for a press that already happened.
+    on<PointerEvent>(target, "pointerenter", (e) => {
+      if (e.pointerType === "mouse" && (e.buttons & 1) !== 0) this.mouseDown = true;
     });
     on<MouseEvent>(window, "mouseup", (e) => {
-      if (e.button === 0) this.mouseDown = false;
+      if (e.button !== 0) return;
+      // Orphan release on the canvas (its mousedown never arrived — e.g. Electron spends
+      // the first click after focus loss on window activation): bank it as one shot,
+      // otherwise the click that refocuses the game is silently eaten.
+      if (!this.mouseDown && !this.spaceHeld && !this.touchFiring && e.target === target) this.pendingTap = true;
+      this.mouseDown = false;
     });
     on<MouseEvent>(target, "contextmenu", (e) => e.preventDefault());
     on<TouchEvent>(target, "touchstart", (e) => this.onTouch(e, true), { passive: true });
@@ -156,6 +172,7 @@ export class Input {
     this.pitchDelta = 0;
     this.mouseDown = false;
     this.spaceHeld = false;
+    this.pendingTap = false;
     this.recomputeAxes();
   }
 
@@ -177,6 +194,13 @@ export class Input {
     this.yawDelta = 0;
     this.pitchDelta = 0;
     return r;
+  }
+
+  /** Take the banked single shot from a swallowed-activation click (true at most once per click). */
+  consumeTap(): boolean {
+    const t = this.pendingTap;
+    this.pendingTap = false;
+    return t;
   }
 
   /** Consume an instantaneous action: was this key pressed during the current frame. */
