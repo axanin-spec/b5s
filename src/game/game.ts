@@ -1,15 +1,16 @@
 /**
  * game.ts — «Космический Рейнджер»: top-down 2D space sim on a Canvas 2D renderer.
  * World: one star system, 5 planets + 4 stations on live orbits, parallax starfields/nebulas.
- * Systems: trading (living market), combat (pirates/patrols/traders/boss), upgrades, saves.
+ * Systems: trading (living market), combat (pirates/patrols/traders/boss), fleet (hulls + gear), saves.
  * All textures are procedural canvases (textures.ts); all entities live in fixed pools.
  */
 
 import {
-  BOLT_CFG, CONTRACTS, CONVOY, ECONOMY, FACTION_CFG, GATE_CFG, GOODS, OCCUPATION, PIRATE_BRANCH, PIRATE_ECON, PLAYER_CFG, POPULATION, QUALITY, RAID,
-  MONEY_TOTAL, POOLS, REPAIR_COST_PER_HP, REP, SAVE_VERSION, AUTOSAVE_INTERVAL, SHIELD_REGEN, SYSTEMS, TRADER_AI, UPGRADE_DEFS,
-  VICTORY_SHARE, WEAPON_RATE, WEAPON_SHOTS, WORLD_CFG,
+  BOLT_CFG, CONTRACTS, CONVOY, ECONOMY, EMERGENCY_PULSE, EQUIP, EQUIP_LINES, EQUIP_SELL, FACTION_CFG, GATE_CFG, GOODS, HULLS, HULL_SELL, OCCUPATION, PIRATE_BRANCH, PIRATE_ECON, PLAYER_CFG, POPULATION, QUALITY, RANKS, RAID,
+  MONEY_TOTAL, POOLS, REPAIR_COST_PER_HP, REP, SAVE_VERSION, AUTOSAVE_INTERVAL, STARTER_KIT, SYSTEMS, TRADER_AI,
+  VICTORY_SHARE, WORLD_CFG,
 } from "./config";
+import type { EquipCat, EquipItem, HullDef, HullId, YardTier } from "./config";
 import { AudioSystem } from "./audio";
 import { GameLoop } from "./engine";
 import { Input } from "./input";
@@ -25,7 +26,7 @@ import { loadImage, loadPlanetTexture } from "./assets";
 import { economyTick, findDockTarget, generateWorld, goodName, kindName, priceOf, refreshAllPrices, updateOrbits } from "./world";
 import { loadSave, writeSave } from "./save";
 import { gameApi, uiBridge, type EndStats, type GameApi, type HudData, type MapSnapshot, type RadioSnapshot, type StationSnapshot } from "./uiBridge";
-import type { ActiveContract, Bolt, ContractOffer, Dockable, Faction, MoneyPools, OccupationState, Pickup, PlayerState, PoolId, RaidOp, SaveGame, Ship, UpgradeId } from "./types";
+import type { ActiveContract, Bolt, ContractOffer, Dockable, Faction, InstalledGear, MoneyPools, OccupationState, Pickup, PlayerState, PoolId, RaidOp, SaveGame, Ship } from "./types";
 import { AiState } from "./types";
 
 const MAX_SHIPS = 40;
@@ -227,7 +228,11 @@ export class Game {
   private static freshPlayerState(): PlayerState {
     return {
       credits: PLAYER_CFG.START_CREDITS,
-      cargo: {}, upgrades: { engine: 0, hull: 0, shield: 0, weapon: 0, cargo: 0 },
+      cargo: {},
+      // Этап 7: истребитель со стартовым комплектом — трюм и слоты теперь от корпуса
+      ship: "fighter",
+      installed: { weapon: [...STARTER_KIT.weapon], shield: [...STARTER_KIT.shield], engine: [...STARTER_KIT.engine] },
+      stash: [],
       outlaw: false, pardons: 0, rep: { patrol: 0, trader: 0, clan: 0 },
       kills: 0, earned: 0, traded: 0, playTime: 0,
       bossKills: 0, victoryShown: false,
@@ -783,15 +788,21 @@ export class Game {
     }
   }
 
-  /** Player volley: WEAPON_SHOTS bolts with a small spread. */
+  /** Player volley (Этап 7): every mounted gun fires its own spread; no guns → emergency pulse. */
   private playerFire(angle: number): void {
-    const lvl = this.player.upgrades.weapon;
-    const shots = WEAPON_SHOTS[lvl];
-    const dmg = UPGRADE_DEFS[3].levels[lvl].v;
-    for (let i = 0; i < shots; i++) {
-      const off = shots === 1 ? 0 : (i - (shots - 1) / 2) * 0.09;
-      this.fireBolt(0, angle + off, dmg, BOLT_CFG.SPEED);
+    const guns = this.guns();
+    if (guns.length === 0) {
+      this.fireBolt(0, angle, EMERGENCY_PULSE.dmg, BOLT_CFG.SPEED);
+      this.audio.sfx("laser");
+      return;
     }
+    guns.forEach((gun, gi) => {
+      const side = guns.length === 1 ? 0 : (gi - (guns.length - 1) / 2) * 0.05;
+      for (let i = 0; i < gun.shots; i++) {
+        const off = gun.shots === 1 ? 0 : (i - (gun.shots - 1) / 2) * 0.09;
+        this.fireBolt(0, angle + side + off, gun.dmg, BOLT_CFG.SPEED);
+      }
+    });
     this.audio.sfx("laser");
   }
 
@@ -1042,14 +1053,51 @@ export class Game {
   /* Player progression helpers                                          */
   /* ================================================================== */
 
-  private upgradeVal(id: UpgradeId): number {
-    const line = UPGRADE_DEFS.find((l) => l.id === id)!;
-    return line.levels[this.player.upgrades[id]].v;
+  /* ---- fleet (Этап 7): статы = корпус + установленные модули ---- */
+
+  private hullDef(): HullDef {
+    return HULLS.find((h) => h.id === this.player.ship) ?? HULLS[0];
   }
 
-  private cargoMax(): number { return this.upgradeVal("cargo"); }
-  private maxHull(): number { return this.upgradeVal("hull"); }
-  private maxShield(): number { return this.upgradeVal("shield"); }
+  private equipped(cat: EquipCat): (EquipItem | null)[] {
+    return this.player.installed[cat].map((id) => (id ? EQUIP[id] ?? null : null));
+  }
+
+  private guns(): EquipItem[] {
+    return this.equipped("weapon").filter((g): g is EquipItem => !!g);
+  }
+
+  /** Лучший ранг в категории — кормит и статы, и арт корпуса. */
+  private bestRank(cat: EquipCat): number {
+    let best = 0;
+    for (const id of this.player.installed[cat]) if (id && EQUIP[id]) best = Math.max(best, EQUIP[id].rankIdx);
+    return best;
+  }
+
+  private cargoMax(): number { return this.hullDef().cargo; }
+  private maxHull(): number { return this.hullDef().hp; }
+  private maxShield(): number {
+    let s = this.hullDef().shieldPlate;
+    for (const it of this.equipped("shield")) if (it) s += it.cap;
+    return s;
+  }
+  /** Реген щита дают только модули: голая плита не восстанавливается. */
+  private shieldRegen(): number {
+    let r = 0;
+    for (const it of this.equipped("shield")) if (it) r += it.regen;
+    return r;
+  }
+  /** Тяга: множитель установленного двигателя; без него — аварийные форсунки (×1). */
+  private engMult(): number {
+    const e = this.equipped("engine").find((x): x is EquipItem => !!x);
+    return e ? e.mult : 1;
+  }
+  private gunRate(): number {
+    let r: number = EMERGENCY_PULSE.rate;
+    for (const g of this.guns()) r = Math.max(r, g.rate);
+    return r;
+  }
+
   private cargoUsed(): number {
     let n = 0;
     for (const g of GOODS) n += this.player.cargo[g.id] ?? 0;
@@ -1058,19 +1106,25 @@ export class Game {
 
   private applyPlayerStats(): void {
     const p = this.ships[0];
-    const eng = this.upgradeVal("engine");
-    p.accel = PLAYER_CFG.BASE_ACCEL * eng;
-    p.maxSpeed = PLAYER_CFG.BASE_MAX_SPEED * eng;
+    const hull = this.hullDef();
+    const m = this.engMult();
+    p.radius = hull.radius;
+    p.accel = hull.accel * m;
+    p.maxSpeed = hull.maxSpeed * m;
     p.maxHp = this.maxHull();
     p.maxShield = this.maxShield();
     this.rebuildPlayerTex();
   }
 
-  /** The Ranger's silhouette grows pods/plates/emitters/nozzles as its upgrade lines level up. */
+  /** The silhouette is the hull class; pods/plates/emitters/nozzles follow the installed modules. */
   private rebuildPlayerTex(): void {
-    const u = this.player.upgrades;
-    this.shipTexMap.player = [makeShipTexture("player", 0, {
-      weapon: u.weapon ?? 0, hull: u.hull ?? 0, shield: u.shield ?? 0, engine: u.engine ?? 0,
+    const hullIdx = HULLS.findIndex((h) => h.id === this.player.ship);
+    this.shipTexMap.player = [makeShipTexture("player", Math.max(0, hullIdx), {
+      hull: Math.max(0, hullIdx),
+      weapon: this.guns().length,
+      weaponRank: this.bestRank("weapon"),
+      shield: this.bestRank("shield"),
+      engine: this.bestRank("engine"),
     })];
   }
 
@@ -1161,7 +1215,13 @@ export class Game {
     this.player = Game.freshPlayerState();
     this.player.credits = save.player.credits;
     this.player.cargo = { ...save.player.cargo };
-    this.player.upgrades = { ...save.player.upgrades };
+    this.player.ship = save.player.ship;
+    this.player.installed = {
+      weapon: [...save.player.installed.weapon],
+      shield: [...save.player.installed.shield],
+      engine: [...save.player.installed.engine],
+    };
+    this.player.stash = [...save.player.stash];
     this.player.outlaw = save.player.outlaw;
     this.player.pardons = save.player.pardons;
     this.player.rep = { ...save.player.rep };
@@ -1224,7 +1284,13 @@ export class Game {
         credits: Math.round(this.player.credits),
         hull: Math.round(p.hp), shield: Math.round(p.shield),
         cargo: { ...this.player.cargo },
-        upgrades: { ...this.player.upgrades },
+        ship: this.player.ship,
+        installed: {
+          weapon: [...this.player.installed.weapon],
+          shield: [...this.player.installed.shield],
+          engine: [...this.player.installed.engine],
+        },
+        stash: [...this.player.stash],
         outlaw: this.player.outlaw,
         pardons: this.player.pardons,
         rep: { ...this.player.rep },
@@ -1471,20 +1537,176 @@ export class Game {
     this.pushHud();
   }
 
-  upgrade(id: string): void {
-    if (this.sm.state !== "docked") return;
-    const line = UPGRADE_DEFS.find((l) => l.id === id);
-    if (!line) return;
-    const lvl = this.player.upgrades[id as UpgradeId];
-    if (lvl >= line.levels.length - 1) return;
-    const cost = line.levels[lvl + 1].cost;
-    if (this.player.credits < cost) return;
-    this.pay(cost, "stations"); // the shipyards run on station capital
-    this.player.upgrades[id as UpgradeId] = lvl + 1;
+  /* ---- Верфь и лавка снаряжения (Этап 7) ---- */
+
+  /** Прилавок этого терминала: клановая касса (оккупация и база) или гражданская станция. */
+  private clanMarket(d: Dockable): boolean {
+    return this.hereOccupied() || d.id === PIRATE_BRANCH.LAIR.id;
+  }
+
+  /** Потолок рангов на витрине: статус дока ×Standing. Клановый рынок — только своим. */
+  private rankCap(d: Dockable): number {
+    if (this.clanMarket(d)) {
+      const c = this.player.rep.clan;
+      return c >= REP.FRIENDLY ? 5 : c >= 0 ? 4 : 2;
+    }
+    const t = this.player.rep.trader;
+    switch (d.kind) {
+      case "hub": return t >= REP.FRIENDLY ? 4 : t >= 0 ? 3 : 2;
+      case "industry": return t >= 0 ? 3 : 2;
+      case "science": return 2;
+      default: return 1;
+    }
+  }
+
+  /** Причина, по которой лавка не продаёт линию/ранг; null — продаёт. */
+  private lineGate(d: Dockable, line: { yard: YardTier }, rankIdx: number): string | null {
+    const clan = this.clanMarket(d);
+    if (clan) {
+      if (line.yard === "flag" && this.player.rep.clan < REP.FRIENDLY) return `флагманская линия — только с доверием кланов ≥ +${REP.FRIENDLY}`;
+    } else {
+      const core = d.kind === "industry" || d.kind === "hub" || d.kind === "science";
+      if (line.yard === "core" && !core) return "такое держат промышленные узлы, научные колонии и хабы";
+      if (line.yard === "flag" && (d.kind !== "hub" || this.player.rep.trader < REP.FRIENDLY)) return `нужен хаб Альянса и статус ≥ +${REP.FRIENDLY}`;
+    }
+    if (rankIdx > this.rankCap(d)) return clan ? "ранг выше доверия кланов" : "ранг выше статуса в Альянсе";
+    return null;
+  }
+
+  /** Причина, по которой верфь не продаёт корпус; null — стапель свободен. */
+  private hullGate(d: Dockable, h: HullDef): string | null {
+    if (h.yard === "any") return null;
+    if (this.clanMarket(d)) {
+      return this.player.rep.clan >= REP.FRIENDLY ? null : `трофейные стапели: кланы ≥ +${REP.FRIENDLY}`;
+    }
+    if (h.yard === "core") {
+      return d.kind === "industry" || d.kind === "hub" || d.kind === "science" ? null : "сборочные стапели — на промышленных, научных узлах и хабах";
+    }
+    return d.kind === "hub" && this.player.rep.trader >= REP.FRIENDLY ? null : `флагман: хаб Альянса со статусом ≥ +${REP.FRIENDLY}`;
+  }
+
+  private refuse(msg: string): void {
+    this.audio.sfx("alarm");
+    this.setNews(`Верфь: ${msg}.`);
+  }
+
+  /** Пересадка на корпус: непригодные модули уходят на склад, дежурный двигатель включается всегда. */
+  private setShip(id: HullId): void {
+    this.player.ship = id;
+    const slots = this.hullDef().slots;
+    const fit = (cat: EquipCat): (string | null)[] => {
+      const kept: (string | null)[] = this.player.installed[cat].filter((x): x is string => !!x && !!EQUIP[x] && EQUIP[x].ships.includes(id));
+      while (kept.length > slots[cat]) this.player.stash.push(kept.pop()!);
+      while (kept.length < slots[cat]) kept.push(null);
+      return kept;
+    };
+    this.player.installed = { weapon: fit("weapon"), shield: fit("shield"), engine: fit("engine") };
+    // без двигателя из дока не выйти: корпус всегда идёт с дежурной машиной
+    if (!this.player.installed.engine.some(Boolean)) this.player.installed.engine[0] = this.hullDef().defaultEngine;
     this.applyPlayerStats();
-    if (id === "shield") this.ships[0].shield = this.ships[0].maxShield;
-    if (id === "hull") this.ships[0].hp = Math.min(this.ships[0].hp + 50, this.ships[0].maxHp);
+    const p = this.ships[0];
+    p.hp = p.maxHp;
+    p.shield = p.maxShield;
+  }
+
+  /** Обмен корпуса с зачётом старого по HULL_SELL; деньги — через пул прилавка (инвариант цел). */
+  buyHull(id: string): void {
+    if (this.sm.state !== "docked") return;
+    const d = this.dockTarget;
+    const to = HULLS.find((h) => h.id === id);
+    if (!d || !to || to.id === this.player.ship) return;
+    const gate = this.hullGate(d, to);
+    if (gate) { this.refuse(gate); return; }
+    if (this.cargoUsed() > to.cargo) { this.refuse(`трюм «${to.name}» не вместит груз: разгрузитесь до ${to.cargo}`); return; }
+    const net = to.price - Math.round(this.hullDef().price * HULL_SELL);
+    if (net > 0 && this.player.credits < net) { this.refuse(`не хватает ₡${(net - Math.floor(this.player.credits)).toLocaleString("ru-RU")} с учётом сдачи корпуса`); return; }
+    const pool = this.tradePool();
+    if (net > 0) this.pay(net, pool);
+    else if (net < 0) this.gain(-net, pool);
+    this.setShip(to.id);
     this.audio.sfx("upgrade");
+    this.setNews(`⚑ Стапель передаёт вам «${to.name}»: ${net >= 0 ? `доплата ₡${net.toLocaleString("ru-RU")}` : `сдача ₡${(-net).toLocaleString("ru-RU")}`}.`);
+    this.saveNow();
+    this.pushStation();
+    this.pushHud();
+  }
+
+  /** Сдача текущего корпуса на слом (всегда остаётся истребитель). */
+  sellHull(): void {
+    if (this.sm.state !== "docked") return;
+    const cur = this.hullDef();
+    if (cur.id === "fighter") { this.refuse("сдавать нечего — «Рейнджер» и есть последний плот"); return; }
+    const back = Math.round(cur.price * HULL_SELL);
+    this.gain(back, this.tradePool());
+    this.setShip("fighter");
+    this.audio.sfx("upgrade");
+    this.setNews(`«${cur.name}» ушёл на слом, верфь вернула ₡${back.toLocaleString("ru-RU")}. Снова истребитель — снова с нуля.`);
+    this.saveNow();
+    this.pushStation();
+    this.pushHud();
+  }
+
+  buyModule(itemId: string): void {
+    if (this.sm.state !== "docked") return;
+    const d = this.dockTarget;
+    const it = EQUIP[itemId];
+    if (!d || !it) return;
+    const gate = this.lineGate(d, it, it.rankIdx);
+    if (gate) { this.refuse(`«${it.name}» — ${gate}`); return; }
+    if (this.player.credits < it.cost) { this.refuse("не хватает кредитов"); return; }
+    this.pay(it.cost, this.tradePool());
+    this.player.stash.push(it.id);
+    this.audio.sfx("trade");
+    this.saveNow();
+    this.pushStation();
+    this.pushHud();
+  }
+
+  sellModule(stashIdx: number): void {
+    if (this.sm.state !== "docked") return;
+    const id = this.player.stash[stashIdx];
+    const it = id ? EQUIP[id] : undefined;
+    if (!it) return;
+    this.player.stash.splice(stashIdx, 1);
+    this.gain(Math.round(it.cost * EQUIP_SELL), this.tradePool());
+    this.audio.sfx("credits");
+    this.saveNow();
+    this.pushStation();
+    this.pushHud();
+  }
+
+  /** Модуль со склада — в слот; то, что стояло, уезжает на склад. */
+  equipModule(stashIdx: number, cat: EquipCat, slot: number): void {
+    if (this.sm.state !== "docked") return;
+    const id = this.player.stash[stashIdx];
+    const it = id ? EQUIP[id] : undefined;
+    if (!it || it.cat !== cat) return;
+    if (!it.ships.includes(this.player.ship)) { this.refuse(`«${it.name}» не встанет на «${this.hullDef().name}»`); return; }
+    const arr = this.player.installed[cat];
+    if (slot < 0 || slot >= this.hullDef().slots[cat]) return;
+    const old = arr[slot];
+    arr[slot] = it.id;
+    this.player.stash.splice(stashIdx, 1);
+    if (old) this.player.stash.push(old);
+    this.audio.sfx("upgrade");
+    this.applyPlayerStats();
+    this.ships[0].shield = Math.min(this.ships[0].shield, this.ships[0].maxShield);
+    this.saveNow();
+    this.pushStation();
+    this.pushHud();
+  }
+
+  unequipModule(cat: EquipCat, slot: number): void {
+    if (this.sm.state !== "docked") return;
+    const arr = this.player.installed[cat];
+    const it = arr[slot] ? EQUIP[arr[slot]!] : undefined;
+    if (!it) return;
+    // двигатель снимаем на дежурный: голый корпус обязан ползти домой
+    arr[slot] = cat === "engine" ? this.hullDef().defaultEngine : null;
+    this.player.stash.push(it.id);
+    this.audio.sfx("upgrade");
+    this.applyPlayerStats();
+    this.ships[0].shield = Math.min(this.ships[0].shield, this.ships[0].maxShield);
     this.saveNow();
     this.pushStation();
     this.pushHud();
@@ -2057,7 +2279,7 @@ export class Game {
     // shield regen
     p.sinceHit += dt;
     if (p.sinceHit > 4 && p.shield < p.maxShield) {
-      p.shield = Math.min(p.maxShield, p.shield + SHIELD_REGEN[this.player.upgrades.shield] * dt);
+      p.shield = Math.min(p.maxShield, p.shield + this.shieldRegen() * dt);
     }
 
     /* ---- player fire ---- */
@@ -2065,7 +2287,7 @@ export class Game {
     if (this.input.firing && p.fireCooldown <= 0) {
       const aim = this.aimAngle() ?? p.angle;
       this.playerFire(aim);
-      p.fireCooldown = 1 / WEAPON_RATE[this.player.upgrades.weapon];
+      p.fireCooldown = 1 / this.gunRate();
       // firing while stationary turns the ship toward the target
       if (spd <= 40) p.angle = turnToward(p.angle, aim, 1);
     }
@@ -3258,20 +3480,65 @@ export class Game {
         reward: this.contract.reward, done: this.contract.done, need: this.contract.need,
         timeLeft: Math.max(0, Math.ceil(this.contract.timeLeft)),
       } : null,
-      upgrades: UPGRADE_DEFS.map((line) => {
-        const lvl = this.player.upgrades[line.id as UpgradeId];
-        const maxLevel = line.levels.length - 1;
-        const next = lvl < maxLevel ? line.levels[lvl + 1] : null;
-        return {
-          id: line.id, name: line.name, desc: line.desc,
-          level: lvl, maxLevel,
-          nextCost: next ? next.cost : null,
-          canAfford: next ? this.player.credits >= next.cost : false,
-          nextValue: next ? next.v : null,
-        };
-      }),
+      fleet: this.fleetSnapshot(d),
     };
     uiBridge.set({ station });
+  }
+
+  /** Верфь + лавка модулей для терминала: что продают, чем владею, что могу купить. */
+  private fleetSnapshot(d: Dockable) {
+    const cur = this.hullDef();
+    const hulls = HULLS.map((h) => {
+      const why = this.hullGate(d, h);
+      const net = h.id === cur.id ? 0 : h.price - Math.round(cur.price * HULL_SELL);
+      return {
+        id: h.id, name: h.name, desc: h.desc,
+        hp: h.hp, speed: h.maxSpeed, cargo: h.cargo,
+        slots: `${h.slots.weapon}/${h.slots.shield}/${h.slots.engine}`,
+        current: h.id === cur.id,
+        stock: why === null && h.id !== cur.id,
+        why,
+        net,
+        canAfford: this.player.credits >= net,
+      };
+    });
+    const slotRows = (["weapon", "shield", "engine"] as EquipCat[]).map((cat) => ({
+      cat,
+      items: this.player.installed[cat].map((id, i) => {
+        const it = id ? EQUIP[id] : null;
+        return it
+          ? { slot: i, itemId: it.id, name: it.name, rank: it.rank, desc: it.desc }
+          : { slot: i, itemId: null, name: "—", rank: "", desc: cat === "engine" ? "нет двигателя" : "пустой слот" };
+      }),
+    }));
+    const shop: { itemId: string; name: string; cat: EquipCat; rank: string; desc: string; cost: number; canAfford: boolean }[] = [];
+    for (const line of EQUIP_LINES) {
+      for (const rank of RANKS) {
+        const it = EQUIP[`${line.id}-${rank}`];
+        if (this.lineGate(d, line, it.rankIdx) === null) {
+          shop.push({ itemId: it.id, name: it.name, cat: line.cat, rank, desc: `${line.desc}: ${it.desc}`, cost: it.cost, canAfford: this.player.credits >= it.cost });
+        }
+      }
+    }
+    const stash = this.player.stash.map((id, idx) => {
+      const it = EQUIP[id];
+      return {
+        idx, itemId: id, name: it.name, cat: it.cat, rank: it.rank, desc: it.desc,
+        fits: it.ships.includes(this.player.ship),
+        sell: Math.round(it.cost * EQUIP_SELL),
+      };
+    });
+    return {
+      ship: {
+        id: cur.id, name: cur.name, cargoMax: cur.cargo,
+        slots: `${cur.slots.weapon}/${cur.slots.shield}/${cur.slots.engine}`,
+        speed: Math.round(cur.maxSpeed * this.engMult()),
+        dps: this.guns().reduce((s, g) => s + g.dmg * g.shots, 0) * this.gunRate(),
+      },
+      hulls, slotRows, shop, stash,
+      sellHullValue: Math.round(cur.price * HULL_SELL),
+      canSellHull: cur.id !== "fighter",
+    };
   }
 
   /* ================================================================== */
@@ -3405,7 +3672,12 @@ export class Game {
       setTouchFiring: (v) => this.input.setTouchFiring(v),
       buy: (g, q) => this.buy(g, q),
       sell: (g, q) => this.sell(g, q),
-      upgrade: (id) => this.upgrade(id),
+      buyHull: (id) => this.buyHull(id),
+      sellHull: () => this.sellHull(),
+      buyModule: (id) => this.buyModule(id),
+      sellModule: (i) => this.sellModule(i),
+      equipModule: (i, cat, slot) => this.equipModule(i, cat, slot),
+      unequipModule: (cat, slot) => this.unequipModule(cat, slot),
       repair: () => this.repair(),
       continuePlaying: () => {
         if (this.sm.state === "victory") { this.sm.transition("playing"); uiBridge.set({ end: null }); this.pushStatic(); }
@@ -3552,6 +3824,32 @@ export class Game {
         this.player.rep[k] = Math.max(REP.MIN, Math.min(REP.MAX, v));
         this.syncPirateStatus();
         return { ...this.player.rep };
+      },
+      // флот (Этап 7): читать статы фиита, бесплатно сменить корпус, закинуть модуль на склад
+      ship: () => {
+        const p = this.ships[0];
+        return {
+          ship: this.player.ship,
+          installed: {
+            weapon: [...this.player.installed.weapon],
+            shield: [...this.player.installed.shield],
+            engine: [...this.player.installed.engine],
+          },
+          stash: [...this.player.stash],
+          hp: p.maxHp, shield: p.maxShield, regen: this.shieldRegen(),
+          speed: p.maxSpeed, accel: p.accel, cargo: this.cargoMax(),
+          dps: this.guns().reduce((s, g) => s + g.dmg * g.shots, 0) * this.gunRate(),
+        };
+      },
+      hull: (id: string) => {
+        if (!HULLS.some((h) => h.id === id)) return null;
+        this.setShip(id as HullId);
+        return this.player.ship;
+      },
+      give: (itemId: string) => {
+        if (!EQUIP[itemId]) return false;
+        this.player.stash.push(itemId);
+        return true;
       },
     };
     window.__gameProbe = () => {

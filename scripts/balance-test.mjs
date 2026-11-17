@@ -120,19 +120,26 @@ const okCurve = nonIncreasing && atThresholds;
 // ── 2b. живой респавн: тонкий фонд → флот тает; полный → восстанавливается ──
 // setFund консервирует money-массу сам (сдвигает delta), поэтому за константность
 // отвечаем так: delta сразу после setFund == delta после N минут симуляции.
+// Популяция живая и осциллирует (спавн 3.2 с против убийств патрулём; списания
+// HULL_COST роняют фонд ниже FUND_FULL → потолок 9→8), поэтому берём НЕ снимок
+// в конце окна (он ловит случайную фазу качелей), а дно тонкой фазы и пик тучной:
+// «тает» = дно ≤ PIRATES_MIN, «восстанавливается» = пик ≥ 8 и выше дна на 2+.
 async function samplePirates(minutes) {
   const before = await page.evaluate(() => window.__econAudit().delta);
   const chunks = Math.round((minutes * 60) / 10);
-  let last = null;
-  for (let i = 0; i < chunks; i++) last = await page.evaluate(() => window.__sim.step(600) && window.__sim.count("pirate"));
+  let last = null, min = Infinity, max = -Infinity;
+  for (let i = 0; i < chunks; i++) {
+    last = await page.evaluate(() => window.__sim.step(600) && window.__sim.count("pirate"));
+    if (last !== null) { if (last < min) min = last; if (last > max) max = last; }
+  }
   const after = await page.evaluate(() => window.__econAudit().delta);
-  return { count: last, before, after };
+  return { count: last, min, max, before, after };
 }
 await page.evaluate(() => window.__pirateEcon().setFund(40000)); // заведомо тонкий
 const thin = await samplePirates(5);
 await page.evaluate(() => window.__pirateEcon().setFund(330000));
 const fat = await samplePirates(4);
-const okRespawn = thin.count !== null && fat.count !== null && thin.count <= 6 && fat.count >= 8 && fat.count > thin.count;
+const okRespawn = thin.count !== null && fat.count !== null && thin.min <= 6 && fat.max >= 8 && fat.max > thin.min + 1;
 // drift за минуты симуляции — плавающий шум суммирования (≤1e-6), экономика обязана беречь ₡ целиком
 const okDeltaStable = Math.abs(thin.before - thin.after) < 0.5 && Math.abs(fat.before - fat.after) < 0.5;
 
@@ -148,7 +155,7 @@ const saved = await page.evaluate(() => {
   return { a, sv: sv ? { pools: sv.pools, credits: sv.player.credits, v: sv.v, raid: sv.raid } : null };
 });
 const near = (x, y) => Math.abs(x - y) < 1.5;
-const roundTrip = !!saved.sv && saved.sv.v === 7 && saved.sv.raid === null
+const roundTrip = !!saved.sv && saved.sv.v === 8 && saved.sv.raid === null
   && near(saved.sv.pools.alliance, saved.a.pools.alliance + saved.a.traderFloat)
   && ["patrol", "clan", "stations"].every((k) => near(saved.sv.pools[k], saved.a.pools[k]))
   && near(saved.sv.credits, saved.a.player);
@@ -171,11 +178,12 @@ await done({
   noPageErrors: pageErrors.length === 0,
 }, {
   curve,
-  pirates: { thin: thin.count, fat: fat.count },
+  pirates: { thin: { min: thin.min, end: thin.count, max: thin.max }, fat: { min: fat.min, end: fat.count, max: fat.max } },
   invariant: {
     start: run1.checkpoints[0]?.pools, end: run1.checkpoints.at(-1)?.pools,
     deltasDistinct: [...new Set(deltas)],
   },
   deltas: { thinRun: [thin.before, thin.after], fatRun: [fat.before, fat.after], afterLoad: after.delta },
+  saved: { audit: saved.a, save: saved.sv },
   pageErrors: pageErrors.slice(0, 3),
 });

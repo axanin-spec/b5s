@@ -13,7 +13,9 @@ function mmss(sec: number): string {
 
 const KIND_NAMES: Record<string, string> = { hunt: 'Охота', transport: 'Доставка', escort: 'Эскорт', bounty: 'Головы' }
 
-type Tab = 'trade' | 'yard' | 'repair' | 'contracts'
+type Tab = 'trade' | 'yard' | 'gear' | 'repair' | 'contracts'
+
+const CAT_NAMES: Record<string, string> = { weapon: 'Орудия', shield: 'Щиты', engine: 'Двигатели' }
 
 function RepBar({ name, v }: { name: string; v: number }) {
   // −100..100 mapped onto the bar around the neutral midline
@@ -58,6 +60,7 @@ export function StationScreen({ s }: { s: StationSnapshot }) {
           <button className={`tab ${tab === 'trade' ? 'active' : ''}`} onClick={() => setTab('trade')}>Торговля</button>
           <button className={`tab ${tab === 'contracts' ? 'active' : ''}`} onClick={() => setTab('contracts')}>Контракты</button>
           <button className={`tab ${tab === 'yard' ? 'active' : ''}`} onClick={() => setTab('yard')}>Верфь</button>
+          <button className={`tab ${tab === 'gear' ? 'active' : ''}`} onClick={() => setTab('gear')}>Снаряжение</button>
           <button className={`tab ${tab === 'repair' ? 'active' : ''}`} onClick={() => setTab('repair')}>Ремонт</button>
         </nav>
 
@@ -174,35 +177,110 @@ export function StationScreen({ s }: { s: StationSnapshot }) {
 
           {tab === 'yard' && (
             <div className="yard-list">
-              {s.upgrades.map((u) => (
-                <div className="yard-card" key={u.id}>
+              <div className="fleet-current">
+                <div>
+                  <span className="fleet-cur-name">{s.fleet.ship.name}</span>
+                  <span className="fleet-cur-stats">
+                    слоты {s.fleet.ship.slots} · трюм {s.fleet.ship.cargoMax} · скорость {s.fleet.ship.speed} · DPS {Math.round(s.fleet.ship.dps)}
+                  </span>
+                </div>
+                {s.fleet.canSellHull && (
+                  <button className="btn btn-small" onClick={() => api()?.sellHull()}>
+                    Сдать на слом +₡ {fmt(s.fleet.sellHullValue)}
+                  </button>
+                )}
+              </div>
+              {s.fleet.hulls.map((h) => (
+                <div className={`yard-card hull-card ${h.current ? 'current' : ''} ${!h.stock && !h.current ? 'locked' : ''}`} key={h.id}>
                   <div className="yard-info">
                     <div className="yard-name">
-                      {u.name}
-                      <span className="pips">
-                        {Array.from({ length: u.maxLevel }, (_, i) => (
-                          <i key={i} className={i < u.level ? 'pip on' : 'pip'} />
-                        ))}
-                      </span>
+                      {h.name}
+                      {h.current && <span className="black-badge">ВАШ КОРПУС</span>}
                     </div>
-                    <div className="yard-desc">{u.desc}</div>
-                    {u.nextValue !== null && (
-                      <div className="yard-next">Следующий уровень: {u.nextValue}</div>
-                    )}
+                    <div className="yard-desc">{h.desc}</div>
+                    <div className="hull-stats">
+                      корпус {h.hp} · скорость {h.speed} · трюм {h.cargo} · слоты о/щ/д {h.slots}
+                    </div>
                   </div>
-                  {u.nextCost !== null ? (
-                    <button
-                      className="btn btn-small"
-                      disabled={!u.canAfford}
-                      onClick={() => api()?.upgrade(u.id)}
-                    >
-                      ₡ {fmt(u.nextCost)}
+                  {h.current ? null : h.stock ? (
+                    <button className="btn btn-small" disabled={!h.canAfford} onClick={() => api()?.buyHull(h.id)}>
+                      {h.net >= 0 ? <>↻ ₡ {fmt(h.net)}</> : <>↻ сдача ₡ {fmt(-h.net)}</>}
                     </button>
                   ) : (
-                    <span className="yard-max">МАКС</span>
+                    <span className="hull-locked">{h.why}</span>
                   )}
                 </div>
               ))}
+              <div className="trade-note">
+                Обмен корпуса: старый идёт в зачёт по 60% цены, неподъёмный груз придётся выгрузить,
+                нелезущие модули уедут на склад. Флагманы продают хабы и клановые рынки.
+              </div>
+            </div>
+          )}
+
+          {tab === 'gear' && (
+            <div className="gear-wrap">
+              <div className="gear-col">
+                <div className="rep-title">Ваш фит · {s.fleet.ship.name}</div>
+                {s.fleet.slotRows.map((row) => (
+                  <div className="gear-cat" key={row.cat}>
+                    <div className="gear-cat-name">{CAT_NAMES[row.cat]}</div>
+                    {row.items.map((it) => (
+                      <div className="gear-row" key={it.slot}>
+                        <span className={`rank-chip ${it.itemId ? 'on' : ''}`}>{it.rank || '—'}</span>
+                        <span className="gear-info">
+                          <b>{it.name}</b>
+                          <em>{it.desc}</em>
+                        </span>
+                        {it.itemId && (
+                          <button className="mini-btn" onClick={() => api()?.unequipModule(row.cat, it.slot)}>Снять</button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ))}
+                {s.fleet.stash.length > 0 && (
+                  <div className="gear-cat">
+                    <div className="gear-cat-name">Склад</div>
+                    {s.fleet.stash.map((st) => (
+                      <div className="gear-row" key={st.idx}>
+                        <span className="rank-chip on">{st.rank}</span>
+                        <span className="gear-info">
+                          <b>{st.name}</b>
+                          <em>{st.desc}{st.fits ? '' : ' · не по корпусу'}</em>
+                        </span>
+                        {st.fits && s.fleet.slotRows.filter((r) => r.cat === st.cat)[0]?.items.map((_, slot) => (
+                          <button className="mini-btn" key={slot} onClick={() => api()?.equipModule(st.idx, st.cat, slot)}>
+                            →{slot + 1}
+                          </button>
+                        ))}
+                        <button className="mini-btn sell" onClick={() => api()?.sellModule(st.idx)}>₡{fmt(st.sell)}</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="gear-col">
+                <div className="rep-title">Лавка снаряжения</div>
+                <div className="gear-shop">
+                  {s.fleet.shop.map((g) => (
+                    <div className="gear-row" key={g.itemId}>
+                      <span className="rank-chip on">{g.rank}</span>
+                      <span className="gear-info">
+                        <b>{g.name}</b>
+                        <em>{CAT_NAMES[g.cat]} · {g.desc}</em>
+                      </span>
+                      <button className="mini-btn" disabled={!g.canAfford} onClick={() => api()?.buyModule(g.itemId)}>
+                        ₡ {fmt(g.cost)}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <div className="trade-note">
+                  Ранги C и B лежат всюду; выше — только там, где вам доверяют: промышленные узлы,
+                  хабы Альянса, а SSS — эксклюзив чёрного рынка кланов.
+                </div>
+              </div>
             </div>
           )}
 

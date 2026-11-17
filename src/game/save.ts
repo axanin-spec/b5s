@@ -3,9 +3,9 @@
  * Browser-local only: does not sync across devices; clearing browser data loses it.
  */
 
-import { GOODS, MONEY_TOTAL, POOLS, SAVE_KEY, SAVE_VERSION, UPGRADE_DEFS } from "./config";
+import { EQUIP, GOODS, HULLS, MONEY_TOTAL, POOLS, SAVE_KEY, SAVE_VERSION } from "./config";
 import { storage } from "./storage";
-import type { SaveGame, UpgradeLevels } from "./types";
+import type { EquipCat, SaveGame } from "./types";
 
 function isNum(v: unknown): v is number {
   return typeof v === "number" && Number.isFinite(v);
@@ -24,11 +24,24 @@ function validCargo(c: unknown): c is Record<string, number> {
   return true;
 }
 
-function validUpgrades(u: unknown): u is UpgradeLevels {
-  if (typeof u !== "object" || u === null) return false;
-  for (const line of UPGRADE_DEFS) {
-    const lv = (u as Record<string, unknown>)[line.id];
-    if (!isNum(lv) || lv < 0 || lv > line.levels.length - 1 || !Number.isInteger(lv)) return false;
+/** v8: корпус + установленные модули + склад (Этап 7). Всё должно сходиться с верфью. */
+function validFleet(p: SaveGame["player"]): boolean {
+  const hull = HULLS.find((h) => h.id === p.ship);
+  if (!hull) return false;
+  const inst = p.installed;
+  if (typeof inst !== "object" || inst === null) return false;
+  for (const cat of ["weapon", "shield", "engine"] as EquipCat[]) {
+    const arr = inst[cat];
+    if (!Array.isArray(arr) || arr.length > hull.slots[cat]) return false;
+    for (const id of arr) {
+      if (id === null) continue;
+      const it = EQUIP[id];
+      if (typeof id !== "string" || !it || it.cat !== cat || !it.ships.includes(hull.id)) return false;
+    }
+  }
+  if (!Array.isArray(p.stash) || p.stash.length > 64) return false;
+  for (const id of p.stash) {
+    if (typeof id !== "string" || !EQUIP[id]) return false;
   }
   return true;
 }
@@ -45,7 +58,7 @@ export function loadSave(): SaveGame | null {
   if (!isNum(p.x) || !isNum(p.y) || !isNum(p.credits) || p.credits < 0) return null;
   if (!isNum(p.hull) || !isNum(p.shield) || !isBool(p.outlaw)) return null;
   if (!isNum(p.pardons) || p.pardons < 0) return null;
-  if (!validCargo(p.cargo) || !validUpgrades(p.upgrades)) return null;
+  if (!validCargo(p.cargo) || !validFleet(p)) return null;
   // v7: the clan standing joined the ledger (Этап 6) — older saves lack it and are rejected
   const rep = p.rep;
   if (typeof rep !== "object" || rep === null || !isNum(rep.patrol) || !isNum(rep.trader) || !isNum(rep.clan)) return null;

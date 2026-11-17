@@ -130,9 +130,15 @@ export interface Dockable {
 /* Player progression                                                  */
 /* ------------------------------------------------------------------ */
 
-export type UpgradeId = "engine" | "hull" | "shield" | "weapon" | "cargo";
+export type HullId = import("./config").HullId;
 
-export type UpgradeLevels = Record<UpgradeId, number>; // 0..4
+export type EquipCat = import("./config").EquipCat;
+
+/**
+ * Установленные модули (Этап 7): массив по числу слотов текущего корпуса,
+ * null = слот пуст. Склад (`stash`) — id модулей, снятых или купленных впрок.
+ */
+export type InstalledGear = Record<EquipCat, (string | null)[]>;
 
 /**
  * Faction standings, −100..100. The clan axis (Этап 6) is the pirate branch:
@@ -178,7 +184,11 @@ export interface ActiveContract extends ContractOffer {
 export interface PlayerState {
   credits: number;
   cargo: Record<string, number>;
-  upgrades: UpgradeLevels;
+  /** Тип текущего корпуса (Этап 7): трюм, слоты и габариты — от него. */
+  ship: HullId;
+  installed: InstalledGear;
+  /** Склад модулей: id из EQUIP. */
+  stash: string[];
   /** Wanted flag: set by attacking patrols/civilians; cleared by atonement kills or a fine. */
   outlaw: boolean;
   /** Pirate kills counted toward the pardon quota while wanted (REP.PARDON_KILLS). */
@@ -250,7 +260,10 @@ export interface SaveGame {
     credits: number;
     hull: number; shield: number;
     cargo: Record<string, number>;
-    upgrades: UpgradeLevels;
+    /** v8: корпус + модули вместо линии улучшений 0–4. */
+    ship: HullId;
+    installed: InstalledGear;
+    stash: string[];
     outlaw: boolean;
     pardons: number;
     rep: RepState;

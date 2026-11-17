@@ -63,8 +63,12 @@ function glow(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, co
 
 export type ShipStyle = "player" | "pirate" | "patrol" | "trader" | "boss";
 
-/** Player upgrade levels (indices into UPGRADE_DEFS, 0..4) that change the ship's silhouette. */
-export interface ShipUpgrades { weapon: number; hull: number; shield: number; engine: number }
+/**
+ * Player fit (Этап 7) driving the hull art: `hull` = index in HULLS (selects the
+ * silhouette via `variant`), `weapon` = mounted gun count, `weaponRank`/`shield`/
+ * `engine` = best installed rank index (0..5) for emitters, plates and nozzles.
+ */
+export interface ShipUpgrades { hull: number; weapon: number; weaponRank: number; shield: number; engine: number }
 
 const SHIP_COLORS: Record<ShipStyle, { hull: string; trim: string; glow: string; cockpit: string }> = {
   player: { hull: "#9fe8d0", trim: "#2e8f74", glow: "#54ffd2", cockpit: "#eafff8" },
@@ -76,8 +80,9 @@ const SHIP_COLORS: Record<ShipStyle, { hull: string; trim: string; glow: string;
 
 const STYLE_SEED: Record<ShipStyle, number> = { player: 11, pirate: 23, patrol: 37, trader: 53, boss: 71 };
 
-/** Class silhouettes in a 128-unit space, nose at −y. */
-function shipBody(style: ShipStyle): Path2D {
+/** Class silhouettes in a 128-unit space, nose at −y; for "player" the variant is the HULLS index. */
+function shipBody(style: ShipStyle, variant = 0): Path2D {
+  if (style === "player") return playerBody(variant);
   const body = new Path2D();
   if (style === "trader") {
     // bulky hauler: wide cargo body, blunt nose
@@ -94,18 +99,41 @@ function shipBody(style: ShipStyle): Path2D {
     body.lineTo(44, 30); body.lineTo(16, 26); body.lineTo(8, 44); body.lineTo(-8, 44);
     body.lineTo(-16, 26); body.lineTo(-44, 30); body.lineTo(-30, 12); body.lineTo(-38, -2);
     body.lineTo(-10, -20); body.closePath();
-  } else if (style === "boss") {
-    // massive flagship: layered hull plates
+  } else {
+    // boss: massive flagship, layered hull plates
     body.moveTo(0, -58); body.lineTo(22, -34); body.lineTo(52, -8); body.lineTo(46, 22);
     body.lineTo(26, 30); body.lineTo(20, 50); body.lineTo(-20, 50); body.lineTo(-26, 30);
     body.lineTo(-46, 22); body.lineTo(-52, -8); body.lineTo(-22, -34); body.closePath();
-  } else {
-    // player ranger: sleek arrow
-    body.moveTo(0, -52); body.lineTo(14, -18); body.lineTo(42, 22); body.lineTo(26, 30);
-    body.lineTo(12, 24); body.lineTo(9, 44); body.lineTo(-9, 44); body.lineTo(-12, 24);
-    body.lineTo(-26, 30); body.lineTo(-42, 22); body.lineTo(-14, -18); body.closePath();
   }
   return body;
+}
+
+/** Player hull line (Этап 7): 0 истребитель · 1 корвет · 2 фрегат · 3 линкор. */
+function playerBody(hull: number): Path2D {
+  const b = new Path2D();
+  if (hull === 3) {
+    // battleship: broad layered sponsons, flat command deck
+    b.moveTo(0, -56); b.lineTo(18, -36); b.lineTo(34, -30); b.lineTo(54, -4); b.lineTo(50, 16);
+    b.lineTo(34, 20); b.lineTo(30, 44); b.lineTo(12, 40); b.lineTo(8, 52); b.lineTo(-8, 52);
+    b.lineTo(-12, 40); b.lineTo(-30, 44); b.lineTo(-34, 20); b.lineTo(-50, 16); b.lineTo(-54, -4);
+    b.lineTo(-34, -30); b.lineTo(-18, -36); b.closePath();
+  } else if (hull === 2) {
+    // frigate: long slab with heavy shoulders
+    b.moveTo(0, -54); b.lineTo(14, -30); b.lineTo(30, -26); b.lineTo(46, 2); b.lineTo(40, 34);
+    b.lineTo(18, 28); b.lineTo(14, 46); b.lineTo(-14, 46); b.lineTo(-18, 28); b.lineTo(-40, 34);
+    b.lineTo(-46, 2); b.lineTo(-30, -26); b.lineTo(-14, -30); b.closePath();
+  } else if (hull === 1) {
+    // corvette: stubby wings, twin nacelle roots
+    b.moveTo(0, -50); b.lineTo(16, -24); b.lineTo(44, 8); b.lineTo(38, 20); b.lineTo(20, 16);
+    b.lineTo(16, 42); b.lineTo(-16, 42); b.lineTo(-20, 16); b.lineTo(-38, 20); b.lineTo(-44, 8);
+    b.lineTo(-16, -24); b.closePath();
+  } else {
+    // fighter ranger: sleek arrow
+    b.moveTo(0, -52); b.lineTo(14, -18); b.lineTo(42, 22); b.lineTo(26, 30);
+    b.lineTo(12, 24); b.lineTo(9, 44); b.lineTo(-9, 44); b.lineTo(-12, 24);
+    b.lineTo(-26, 30); b.lineTo(-42, 22); b.lineTo(-14, -18); b.closePath();
+  }
+  return b;
 }
 
 export function makeShipTexture(style: ShipStyle, variant = 0, up?: ShipUpgrades): HTMLCanvasElement {
@@ -116,7 +144,7 @@ export function makeShipTexture(style: ShipStyle, variant = 0, up?: ShipUpgrades
   ctx.translate(s / 2, s / 2);
   ctx.scale(u, u);
 
-  const body = shipBody(style);
+  const body = shipBody(style, variant);
   const rnd = mulberry32(STYLE_SEED[style] + variant * 977);
 
   /* engine glow behind the hull (grows with the player's engine upgrade) */
@@ -283,29 +311,37 @@ export function makeShipTexture(style: ShipStyle, variant = 0, up?: ShipUpgrades
     ctx.fillRect(-16, 32, 32, 18);
   }
 
-  /* player hull mutates with the upgrade lines — visual progression */
+  /* player fit mutates with the installed modules — visual progression (Этап 7) */
   if (up) {
     const gold = "#ffd24a";
-    if (up.weapon >= 2) {
-      // wingtip gun pods
+    const hot = up.weaponRank >= 4; // SS/SSS guns get gold emitters
+    if (up.weapon >= 1) {
+      // wingtip gun pods (one pair per mounted gun, up to three)
       for (const sx of [-1, 1]) {
         ctx.fillStyle = "#20303f";
         ctx.fillRect(sx > 0 ? 34 : -42, 8, 8, 22);
-        ctx.fillStyle = up.weapon >= 4 ? gold : col.glow;
+        ctx.fillStyle = hot ? gold : col.glow;
         ctx.fillRect(sx > 0 ? 35.5 : -40.5, 6, 5, 5);
       }
     }
-    if (up.weapon >= 4) {
+    if (up.weapon >= 2) {
       // second, larger pair on the inner wings
       for (const sx of [-1, 1]) {
         ctx.fillStyle = "#20303f";
         ctx.fillRect(sx > 0 ? 20 : -26, -18, 6, 16);
-        ctx.fillStyle = gold;
+        ctx.fillStyle = hot ? gold : col.glow;
         ctx.fillRect(sx > 0 ? 21 : -25, -20, 4, 4);
       }
     }
+    if (up.weapon >= 3) {
+      // spine-mounted heavy emitter (battleship third gun)
+      ctx.fillStyle = "#20303f";
+      ctx.fillRect(-3, 16, 6, 18);
+      ctx.fillStyle = hot ? gold : col.glow;
+      ctx.fillRect(-2, 32, 4, 4);
+    }
     if (up.hull >= 2) {
-      // armour chevrons over the wings
+      // armour chevrons over the wings (frigate and up)
       for (const sx of [-1, 1]) {
         ctx.fillStyle = shade(col.trim, -0.15);
         ctx.beginPath();
@@ -313,7 +349,8 @@ export function makeShipTexture(style: ShipStyle, variant = 0, up?: ShipUpgrades
         ctx.closePath(); ctx.fill();
       }
     }
-    if (up.hull >= 4) {
+    if (up.hull >= 3) {
+      // command deck spine (battleship)
       ctx.fillStyle = shade(col.trim, 0.1);
       ctx.fillRect(-7, 2, 14, 26);
       ctx.strokeStyle = "rgba(230,245,255,0.5)";

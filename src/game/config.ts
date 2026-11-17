@@ -361,46 +361,178 @@ export const PIRATE_BRANCH = {
 } as const;
 
 /* ------------------------------------------------------------------ */
-/* Upgrades (Верфь): 5 lines × 5 levels, index 0 = stock              */
+/* Флот (Этап 7): корпуса + снаряжение рангов C–SSS                    */
 /* ------------------------------------------------------------------ */
 
-export interface UpgradeLine {
-  id: string;
+export type HullId = "fighter" | "corvette" | "frigate" | "battleship";
+
+/** Насколько крупный док держит корпус или линию снаряжения на стенде. */
+export type YardTier = "any" | "core" | "flag";
+
+export interface HullDef {
+  id: HullId;
   name: string;
   desc: string;
-  /** Per-level value (meaning depends on the line) and purchase cost to reach that level. */
-  levels: readonly { v: number; cost: number }[];
+  /** Цена на верфи (₡); при обмене старый корпус идёт в зачёт по HULL_SELL. */
+  price: number;
+  radius: number;
+  /** Прочность корпуса. */
+  hp: number;
+  /** Бронеплиты: базовая ёмкость щита до модулей. */
+  shieldPlate: number;
+  accel: number;
+  maxSpeed: number;
+  cargo: number;
+  slots: { weapon: number; shield: number; engine: number };
+  yard: YardTier;
+  /** Дежурный двигатель в комплекте корпуса. */
+  defaultEngine: string;
 }
 
-export const UPGRADE_DEFS: readonly UpgradeLine[] = [
+export const HULLS: readonly HullDef[] = [
   {
-    id: "engine", name: "Двигатель", desc: "Скорость и ускорение",
-    levels: [{ v: 1, cost: 0 }, { v: 1.18, cost: 4200 }, { v: 1.38, cost: 9500 }, { v: 1.62, cost: 21000 }, { v: 1.92, cost: 45000 }],
+    id: "fighter", name: "Истребитель «Рейнджер»", desc: "Быстрый, юркий, держит один модуль на категорию",
+    price: 5_000, radius: 30, hp: 120, shieldPlate: 0, accel: 360, maxSpeed: 470, cargo: 24,
+    slots: { weapon: 1, shield: 1, engine: 1 }, yard: "any", defaultEngine: "spark-C",
   },
   {
-    id: "hull", name: "Корпус", desc: "Прочность корпуса",
-    levels: [{ v: 100, cost: 0 }, { v: 150, cost: 5000 }, { v: 210, cost: 12000 }, { v: 290, cost: 26000 }, { v: 400, cost: 56000 }],
+    id: "corvette", name: "Корвет «Ястреб»", desc: "Рабочая лошадка: два орудия, приличный трюм",
+    price: 42_000, radius: 34, hp: 300, shieldPlate: 40, accel: 330, maxSpeed: 430, cargo: 48,
+    slots: { weapon: 2, shield: 1, engine: 1 }, yard: "any", defaultEngine: "spark-C",
   },
   {
-    id: "shield", name: "Щиты", desc: "Ёмкость и регенерация",
-    levels: [{ v: 60, cost: 0 }, { v: 100, cost: 4600 }, { v: 150, cost: 11000 }, { v: 220, cost: 24000 }, { v: 320, cost: 50000 }],
+    id: "frigate", name: "Фрегат «Борей»", desc: "Линкор для бедных: двойные щиты, большой трюм",
+    price: 150_000, radius: 40, hp: 620, shieldPlate: 90, accel: 300, maxSpeed: 390, cargo: 90,
+    slots: { weapon: 2, shield: 2, engine: 1 }, yard: "core", defaultEngine: "turbine-C",
   },
   {
-    id: "weapon", name: "Оружие", desc: "Урон и залп",
-    levels: [{ v: 10, cost: 0 }, { v: 16, cost: 5200 }, { v: 24, cost: 12500 }, { v: 34, cost: 28000 }, { v: 48, cost: 60000 }],
+    id: "battleship", name: "Линкор «Суверен»", desc: "Мобильная крепость: три орудия, трюм грузовоза",
+    price: 380_000, radius: 48, hp: 1100, shieldPlate: 150, accel: 250, maxSpeed: 330, cargo: 130,
+    slots: { weapon: 3, shield: 2, engine: 1 }, yard: "flag", defaultEngine: "reactor-C",
   },
-  {
-    id: "cargo", name: "Трюм", desc: "Вместимость груза",
-    levels: [{ v: 24, cost: 0 }, { v: 40, cost: 3200 }, { v: 64, cost: 7500 }, { v: 96, cost: 16000 }, { v: 140, cost: 34000 }],
-  },
+];
+
+/** Возврат верфи при сдаче корпуса; модули продаёт склад по EQUIP_SELL. */
+export const HULL_SELL = 0.6;
+export const EQUIP_SELL = 0.55;
+
+export const RANKS = ["C", "B", "A", "S", "SS", "SSS"] as const;
+export type Rank = (typeof RANKS)[number];
+
+export type EquipCat = "weapon" | "shield" | "engine";
+
+/** Множитель цены ранга от базовой стоимости линии. */
+const RANK_COST = [1, 3.2, 8.5, 20, 46, 100] as const;
+
+const WEAPON_RANKS = [
+  { dmg: 10, shots: 1, rate: 3.4 },
+  { dmg: 15, shots: 1, rate: 3.6 },
+  { dmg: 22, shots: 2, rate: 3.8 },
+  { dmg: 31, shots: 2, rate: 4.0 },
+  { dmg: 42, shots: 3, rate: 4.3 },
+  { dmg: 56, shots: 3, rate: 4.6 },
 ] as const;
 
-/** Shield regen per second by shield level. */
-export const SHIELD_REGEN = [6, 9, 13, 18, 26] as const;
-/** Projectiles per volley by weapon level. */
-export const WEAPON_SHOTS = [1, 1, 2, 2, 3] as const;
-/** Volleys per second by weapon level. */
-export const WEAPON_RATE = [3.2, 3.6, 3.8, 4.2, 4.4] as const;
+const SHIELD_RANKS = [
+  { cap: 60, regen: 6 },
+  { cap: 110, regen: 9 },
+  { cap: 180, regen: 13 },
+  { cap: 280, regen: 18 },
+  { cap: 420, regen: 24 },
+  { cap: 600, regen: 32 },
+] as const;
+
+/** Множитель скорости ранга; линия гасит бонус (тяжёлым машинам нужен тяжёлый реактор). */
+const ENGINE_RANKS = [1, 1.18, 1.38, 1.62, 1.9, 2.2] as const;
+
+export interface EquipLine {
+  id: string;
+  name: string;
+  cat: EquipCat;
+  /** Типы корпусов, на которые встаёт модуль этой линии. */
+  ships: readonly HullId[];
+  /** Оружие/щиты: множитель статов ранга. Двигатели: доля рангового бонуса скорости. */
+  mult: number;
+  /** Цена ранга C; дальше × RANK_COST. */
+  cost: number;
+  yard: YardTier;
+  desc: string;
+}
+
+export const EQUIP_LINES: readonly EquipLine[] = [
+  { id: "needle", name: "Игла", cat: "weapon", ships: ["fighter", "corvette"], mult: 0.85, cost: 1_300, yard: "any", desc: "лёгкий эмиттер" },
+  { id: "wasp", name: "Шершень", cat: "weapon", ships: ["corvette", "frigate"], mult: 1, cost: 1_800, yard: "core", desc: "импульсная пушка" },
+  { id: "hammer", name: "Молот", cat: "weapon", ships: ["frigate", "battleship"], mult: 1.3, cost: 2_600, yard: "core", desc: "масс-драйвер" },
+  { id: "lance", name: "Сингулярность", cat: "weapon", ships: ["battleship"], mult: 1.7, cost: 4_200, yard: "flag", desc: "гравитационная пика" },
+  { id: "turtle", name: "Черепаха", cat: "shield", ships: ["fighter", "corvette"], mult: 0.85, cost: 1_100, yard: "any", desc: "дефлектор" },
+  { id: "bastion", name: "Бастион", cat: "shield", ships: ["corvette", "frigate"], mult: 1, cost: 1_600, yard: "core", desc: "щитовик" },
+  { id: "citadel", name: "Цитадель", cat: "shield", ships: ["frigate", "battleship"], mult: 1.25, cost: 2_400, yard: "flag", desc: "полевой щит" },
+  { id: "spark", name: "Искра", cat: "engine", ships: ["fighter", "corvette"], mult: 1.05, cost: 900, yard: "any", desc: "химфортунка" },
+  { id: "turbine", name: "Турбина", cat: "engine", ships: ["corvette", "frigate"], mult: 1, cost: 1_400, yard: "core", desc: "плазменная турбина" },
+  { id: "reactor", name: "Реактор", cat: "engine", ships: ["frigate", "battleship"], mult: 0.92, cost: 2_200, yard: "core", desc: "термоядро" },
+];
+
+export interface EquipItem {
+  /** "needle-C" — id линии + ранг. */
+  id: string;
+  line: string;
+  name: string;
+  cat: EquipCat;
+  rank: Rank;
+  rankIdx: number;
+  ships: readonly HullId[];
+  yard: YardTier;
+  cost: number;
+  // weapon
+  dmg: number;
+  shots: number;
+  rate: number;
+  // shield
+  cap: number;
+  regen: number;
+  // engine
+  mult: number;
+  /** Строка статов для карточек верфи. */
+  desc: string;
+}
+
+function buildEquip(): Record<string, EquipItem> {
+  const out: Record<string, EquipItem> = {};
+  for (const line of EQUIP_LINES) {
+    RANKS.forEach((rank, i) => {
+      const item: EquipItem = {
+        id: `${line.id}-${rank}`, line: line.id, name: `${line.name} «${rank}»`, cat: line.cat,
+        rank, rankIdx: i, ships: line.ships, yard: line.yard,
+        cost: Math.round(line.cost * RANK_COST[i]),
+        dmg: Math.round(WEAPON_RANKS[i].dmg * line.mult),
+        shots: WEAPON_RANKS[i].shots,
+        rate: WEAPON_RANKS[i].rate,
+        cap: Math.round(SHIELD_RANKS[i].cap * line.mult),
+        regen: Math.round(SHIELD_RANKS[i].regen * line.mult),
+        mult: Number((1 + (ENGINE_RANKS[i] - 1) * line.mult).toFixed(2)),
+        desc: "",
+      };
+      item.desc = line.cat === "weapon"
+        ? `урон ${item.dmg}×${item.shots}, темп ${item.rate}/с`
+        : line.cat === "shield"
+          ? `ёмкость +${item.cap}, реген +${item.regen}/с`
+          : `скорость ×${item.mult.toFixed(2)}`;
+      out[item.id] = item;
+    });
+  }
+  return out;
+}
+
+/** Весь рынок снаряжения: 10 линий × 6 рангов, сгенерирован из таблиц. */
+export const EQUIP: Record<string, EquipItem> = buildEquip();
+
+/** Стартовый комплект «Рейнджера» (включён в цену корпуса). */
+export const STARTER_KIT: Record<EquipCat, (string | null)[]> = {
+  weapon: ["needle-C"], shield: ["turtle-C"], engine: ["spark-C"],
+};
+
+/** Залп без орудий: аварийный импульс форсунок. */
+export const EMERGENCY_PULSE = { dmg: 6, shots: 1, rate: 2.4 } as const;
 
 export const REPAIR_COST_PER_HP = 6;
 
@@ -410,8 +542,8 @@ export const REPAIR_COST_PER_HP = 6;
 
 export const SAVE_KEY = "savegame";
 // v6: closed money pools (pools + player = MONEY_TOTAL); older saves are rejected
-/** v7: added the clan standing (Этап 6). Older saves are rejected, not migrated. */
-export const SAVE_VERSION = 7;
+/** v8: upgrades are gone — hull class + installed modules (Этап 7). Older saves are rejected. */
+export const SAVE_VERSION = 8;
 export const AUTOSAVE_INTERVAL = 30;
 
 /* ------------------------------------------------------------------ */

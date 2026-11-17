@@ -4,6 +4,7 @@
  * React calls back into the game exclusively through `gameApi` (set by boot).
  */
 
+import type { EquipCat } from "./config";
 import type { GameState } from "./state";
 
 export interface HudData {
@@ -96,13 +97,25 @@ export interface StationSnapshot {
   contracts: { id: number; kind: string; title: string; desc: string; reward: number; timeLimit: number }[];
   /** Currently accepted contract (also visible here while docked). */
   active: { kind: string; title: string; desc: string; reward: number; done: number; need: number; timeLeft: number } | null;
-  upgrades: {
+  /** Верфь и лавка снаряжения (Этап 7). */
+  fleet: FleetSnapshot;
+}
+
+/** Станционное окно флота: корпуса, слоты, склад, витрина модулей. */
+export interface FleetSnapshot {
+  ship: { id: string; name: string; cargoMax: number; slots: string; speed: number; dps: number };
+  hulls: {
     id: string; name: string; desc: string;
-    level: number; maxLevel: number;
-    nextCost: number | null;
-    canAfford: boolean;
-    nextValue: number | null;
+    hp: number; speed: number; cargo: number; slots: string;
+    current: boolean; stock: boolean; why: string | null;
+    /** Доплата при обмене (цена минус зачёт текущего); 0 у текущего. */
+    net: number; canAfford: boolean;
   }[];
+  slotRows: { cat: EquipCat; items: { slot: number; itemId: string | null; name: string; rank: string; desc: string }[] }[];
+  shop: { itemId: string; name: string; cat: EquipCat; rank: string; desc: string; cost: number; canAfford: boolean }[];
+  stash: { idx: number; itemId: string; name: string; cat: EquipCat; rank: string; desc: string; fits: boolean; sell: number }[];
+  sellHullValue: number;
+  canSellHull: boolean;
 }
 
 /** Space radio deal with a nearby caravan (Этап 5b): sells = what it hawks, buys = what it lifts. */
@@ -185,7 +198,14 @@ export interface GameApi {
   setTouchFiring(v: boolean): void;
   buy(goodId: string, qty: number): void;
   sell(goodId: string, qty: number): void;
-  upgrade(id: string): void;
+  /** Верфь (Этап 7): обмен корпуса с зачётом старого. */
+  buyHull(id: string): void;
+  /** Сдача корпуса на слом (кроме истребителя). */
+  sellHull(): void;
+  buyModule(itemId: string): void;
+  sellModule(stashIdx: number): void;
+  equipModule(stashIdx: number, cat: EquipCat, slot: number): void;
+  unequipModule(cat: EquipCat, slot: number): void;
   repair(): void;
   /** Victory screen → back into the sandbox. */
   continuePlaying(): void;

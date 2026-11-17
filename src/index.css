@@ -591,6 +591,55 @@ kbd {
 .yard-next { font-size: 12px; color: var(--gold); margin-top: 2px; }
 .yard-max { color: var(--accent); font-size: 12px; letter-spacing: 0.2em; }
 
+/* ============================ флот (Этап 7) ============================ */
+
+.fleet-current {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 1px solid rgba(84, 255, 210, 0.3);
+  background: rgba(84, 255, 210, 0.06);
+}
+.fleet-cur-name { font-weight: 700; color: var(--accent); }
+.fleet-cur-stats { display: block; font-size: 12px; color: var(--text-dim); margin-top: 2px; }
+.hull-card.current { border-color: rgba(84, 255, 210, 0.5); }
+.hull-card.locked { opacity: 0.62; }
+.hull-stats { font-size: 12px; color: #9fd8c8; margin-top: 3px; font-variant-numeric: tabular-nums; }
+.hull-locked { font-size: 11px; color: var(--text-dim); max-width: 190px; text-align: right; }
+
+.gear-wrap { display: grid; grid-template-columns: 1fr 1.15fr; gap: 14px; align-items: start; }
+.gear-col { display: flex; flex-direction: column; gap: 8px; }
+.gear-cat {
+  padding: 8px 10px;
+  border: 1px solid rgba(84, 255, 210, 0.16);
+  background: rgba(10, 22, 34, 0.5);
+}
+.gear-cat-name {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  color: var(--accent);
+  margin-bottom: 6px;
+}
+.gear-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+.gear-info { flex: 1; min-width: 0; font-size: 12px; color: #eafff8; }
+.gear-info b { margin-right: 6px; }
+.gear-info em { display: block; font-style: normal; font-size: 11px; color: var(--text-dim); }
+.rank-chip {
+  min-width: 34px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 3px 4px;
+  color: var(--text-dim);
+  border: 1px dashed rgba(150, 170, 190, 0.35);
+}
+.rank-chip.on { color: #0f1a12; background: #8fd8b0; border: 1px solid rgba(84, 255, 210, 0.6); }
+.gear-shop { display: flex; flex-direction: column; gap: 2px; max-height: 420px; overflow-y: auto; }
+
 .repair-block { text-align: center; padding: 18px 6px; }
 .repair-status { font-size: 17px; }
 .repair-ok { color: var(--accent); }
