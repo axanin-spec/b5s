@@ -11,7 +11,7 @@ function mmss(sec: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
 }
 
-const KIND_NAMES: Record<string, string> = { hunt: 'Охота', transport: 'Доставка', escort: 'Эскорт' }
+const KIND_NAMES: Record<string, string> = { hunt: 'Охота', transport: 'Доставка', escort: 'Эскорт', bounty: 'Головы' }
 
 type Tab = 'trade' | 'yard' | 'repair' | 'contracts'
 
@@ -141,7 +141,7 @@ export function StationScreen({ s }: { s: StationSnapshot }) {
                   </div>
                   <div className="contract-desc">{s.active.desc}</div>
                   <div className="contract-meta">
-                    {s.active.kind === 'hunt'
+                    {s.active.kind === 'hunt' || s.active.kind === 'bounty'
                       ? <>Прогресс: <b>{s.active.done}/{s.active.need}</b></>
                       : <>Ждём завершения в секторе</>}
                     {' · '}Осталось: <b>{mmss(s.active.timeLeft)}</b>
@@ -164,7 +164,7 @@ export function StationScreen({ s }: { s: StationSnapshot }) {
                   ))}
                   <div className="trade-note">
                     {s.occupied
-                      ? '⚑ Пиратская оккупация: брокеры Альянса эвакуированы, доска контрактов пуста. Торгуйте на чёрном рынке — краденое берут с руками.'
+                      ? '⚑ Пиратская оккупация: брокеры Альянса эвакуированы. Доску ведут кланы: разборки, головы патруля, тёмные рейсы. Платят вперёд глазами; сорванный контракт кланы запоминают.'
                       : 'Брокер обновляет доску при каждой стыковке. Активен только один контракт; гиперпрыжок автоматически его срывает.'}
                   </div>
                 </>

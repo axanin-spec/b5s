@@ -882,7 +882,9 @@ export class Game {
       this.player.kills += s.faction === "pirate" ? 1 : 0;
       // faction standings: order kept by killing pirates, chaos punished by killing civilians
       if (s.faction === "pirate") {
-        this.addRep(REP.KILL.pirate);
+        // a clan-board hunt (6b) is hired work, not kin-slaying: the clan ledger stays shut
+        const hiredOut = this.contract !== null && this.contract.funder === "clan" && this.contract.kind === "hunt";
+        this.addRep(hiredOut ? { patrol: REP.KILL.pirate.patrol, trader: REP.KILL.pirate.trader } : REP.KILL.pirate);
         // wanted rangers buy back trust with pirate heads — the hunt ends when the quota fills
         if (this.patrolHostile()) {
           this.player.pardons += 1;
@@ -912,6 +914,10 @@ export class Game {
       if (this.contract.kind === "hunt" && byPlayer && s.faction === "pirate") {
         this.contract.done++;
         if (this.contract.done >= this.contract.need) this.completeContract("все цели ликвидированы");
+      } else if (this.contract.kind === "bounty" && byPlayer && s.faction === "patrol") {
+        // clan bounty (6b): every patrol hull burned is a delivered head
+        this.contract.done++;
+        if (this.contract.done >= this.contract.need) this.completeContract("головы сданы, трибунал молчит");
       } else if (this.contract.kind === "escort" && s.escortId === this.contract.id) {
         this.failContract("сопровождаемый транспорт сбит");
       }
@@ -1177,7 +1183,8 @@ export class Game {
     // restore an in-progress hunt/transport contract (escorts do not survive a reload)
     if (save.contract) {
       const sc = save.contract;
-      this.contract = { ...sc, timeLimit: sc.timeLeft, escortIdx: -1 };
+      // funder is optional in v7 saves written before 6b — the Alliance board paid those
+      this.contract = { ...sc, funder: sc.funder ?? "alliance", timeLimit: sc.timeLeft, escortIdx: -1 };
     }
     // restore market fluctuations
     for (const d of this.dockables) {
@@ -1225,6 +1232,7 @@ export class Game {
         need: this.contract.need, done: this.contract.done,
         goodId: this.contract.goodId, qty: this.contract.qty,
         destId: this.contract.destId, destName: this.contract.destName,
+        funder: this.contract.funder,
       } : null,
       fluct,
       stats: {
@@ -1577,8 +1585,8 @@ export class Game {
   /** One offer of each kind per docking; the broker restocks every undock. */
   private genOffers(here: Dockable): void {
     this.offers = [];
-    // no licensed brokers in pirate space — the board is dead until liberation
-    if (this.hereOccupied()) return;
+    // licensed brokers don't work in pirate space — there the clans post their own board (6b)
+    if (this.hereOccupied()) { this.genClanOffers(here); return; }
     const others = this.dockables.filter((d) => d.id !== here.id);
     if (others.length === 0) return;
     const jit = (base: number) => Math.round((base * (1 + (this.rnd() * 2 - 1) * CONTRACTS.JITTER)) / 50) * 50;
@@ -1586,7 +1594,7 @@ export class Game {
 
     const n = 4 + Math.floor(this.rnd() * 3);
     this.offers.push({
-      id: ++this.contractSeq, kind: "hunt",
+      id: ++this.contractSeq, kind: "hunt", funder: "alliance",
       title: "Охота на пиратов",
       desc: `Уничтожить ${n} пиратов в системе ${this.systemDef.name}.`,
       reward: jit((650 + 140 * n) * boost), timeLimit: CONTRACTS.TIME_HUNT,
@@ -1597,7 +1605,7 @@ export class Game {
     const g = GOODS[Math.floor(this.rnd() * GOODS.length)];
     const qty = 6 + Math.floor(this.rnd() * 7);
     this.offers.push({
-      id: ++this.contractSeq, kind: "transport",
+      id: ++this.contractSeq, kind: "transport", funder: "alliance",
       title: "Курьерский рейс",
       desc: `Передать запечатанный контейнер (${qty} ед. «${goodName(g.id)}»). Пункт назначения: ${dest.name}. Трюм не занимает.`,
       reward: jit(900 + qty * 95), timeLimit: CONTRACTS.TIME_TRANSPORT,
@@ -1607,12 +1615,54 @@ export class Game {
     const dest2 = others[Math.floor(this.rnd() * others.length)];
     const callsign = `${CONTRACTS.CALLSIGNS[Math.floor(this.rnd() * CONTRACTS.CALLSIGNS.length)]}-${2 + Math.floor(this.rnd() * 8)}`;
     this.offers.push({
-      id: ++this.contractSeq, kind: "escort",
+      id: ++this.contractSeq, kind: "escort", funder: "alliance",
       title: "Эскорт транспорта",
       desc: `Сопроводить транспорт «${callsign}». Пункт назначения: ${dest2.name}. Собьют его — контракт провален.`,
       reward: jit(1150), timeLimit: CONTRACTS.TIME_ESCORT,
       need: 1, goodId: "", qty: 0, destId: dest2.id, destName: dest2.name,
     });
+  }
+
+  /**
+   * The clans' board (Этап 6b) — posted only in occupied systems and, later, at the
+   * lair. Zero trust (clan ≤ UNFRIENDLY) and nobody even hails you here. Clan money
+   * pays, clan law scores: patrol and Alliance standings burn on the way.
+   */
+  private genClanOffers(here: Dockable): void {
+    if (this.player.rep.clan <= REP.UNFRIENDLY) return;
+    const jit = (base: number) => Math.round((base * (1 + (this.rnd() * 2 - 1) * CONTRACTS.JITTER)) / 50) * 50;
+
+    const n = 3 + Math.floor(this.rnd() * 3);
+    this.offers.push({
+      id: ++this.contractSeq, kind: "hunt", funder: "clan",
+      title: "Разборки кланов",
+      desc: `Соседний клан нагрянул «в гости» в системе ${this.systemDef.name}. Проводите ${n} головорезов обратно — чей флаг им удобнее поднять, решайте сами.`,
+      reward: jit(600 + 150 * n), timeLimit: CONTRACTS.TIME_HUNT,
+      need: n, goodId: "", qty: 0, destId: "", destName: "",
+    });
+
+    const k = 2 + Math.floor(this.rnd() * 3);
+    this.offers.push({
+      id: ++this.contractSeq, kind: "bounty", funder: "clan",
+      title: "Головы патруля",
+      desc: `Катера патруля разгуливают по системе ${this.systemDef.name} как у себя в доке. Снимите ${k} — трибунал спрашивать не будет, кланы платят вперёд глазами.`,
+      reward: jit(950 + 190 * k), timeLimit: CONTRACTS.TIME_HUNT,
+      need: k, goodId: "", qty: 0, destId: "", destName: "",
+    });
+
+    const others = this.dockables.filter((d) => d.id !== here.id);
+    if (others.length > 0) {
+      const dest = others[Math.floor(this.rnd() * others.length)];
+      const g = GOODS[Math.floor(this.rnd() * GOODS.length)];
+      const qty = 5 + Math.floor(this.rnd() * 6);
+      this.offers.push({
+        id: ++this.contractSeq, kind: "transport", funder: "clan",
+        title: "Тёмный рейс",
+        desc: `Доставьте ящик «неучтёнки» (${qty} ед. «${goodName(g.id)}») своим на ${dest.name}, не задерживаясь в доке. Трюм не занимает.`,
+        reward: jit(780 + qty * 90), timeLimit: CONTRACTS.TIME_TRANSPORT,
+        need: 1, goodId: g.id, qty, destId: dest.id, destName: dest.name,
+      });
+    }
   }
 
   acceptContract(id: number): void {
@@ -1660,9 +1710,15 @@ export class Game {
     const c = this.contract;
     if (!c) return;
     this.contract = null;
-    const paid = this.gain(c.reward, "alliance"); // contract money comes out of the Alliance fund
+    const clanJob = c.funder === "clan";
+    // the funder's treasury pays: Alliance brokers dip into Alliance capital, clan jobs into the clans' fund
+    const paid = this.gain(c.reward, clanJob ? "clan" : "alliance");
     this.player.earned += paid;
-    this.addRep(CONTRACTS.REP[c.kind]);
+    // the two ledgers of law: Alliance board feeds patrol/trader, the clan board feeds clans
+    // at the price of the other two (kinds never mix across boards, hence the casts)
+    this.addRep(clanJob
+      ? PIRATE_BRANCH.CONTRACT_REP[c.kind as keyof typeof PIRATE_BRANCH.CONTRACT_REP]
+      : CONTRACTS.REP[c.kind as keyof typeof CONTRACTS.REP]);
     this.audio.sfx("credits");
     this.setNews(`Контракт выполнен: ${c.title} — ${reason}. +₡${paid.toLocaleString("ru-RU")}`);
     if (this.sm.state === "docked" && this.dockTarget) this.genOffers(this.dockTarget);
@@ -1672,10 +1728,12 @@ export class Game {
   }
 
   private failContract(reason: string): void {
-    if (!this.contract) return;
-    const ei = this.contract.escortIdx;
+    const c = this.contract;
+    if (!c) return;
+    const ei = c.escortIdx;
     if (ei >= 0 && this.ships[ei].active) this.ships[ei].escortId = -1;
     this.contract = null;
+    if (c.funder === "clan") this.addRep(PIRATE_BRANCH.CONTRACT_FAIL_REP); // clans remember dropped work
     this.setNews(`Контракт провален: ${reason}.`);
     this.pushStation();
     this.pushHud();
@@ -1751,7 +1809,9 @@ export class Game {
       const c = this.contract;
       base = c.kind === "hunt"
         ? `КОНТРАКТ · Охота ${c.done}/${c.need} · ${fmtT(c.timeLeft)}`
-        : `КОНТРАКТ · ${c.kind === "transport" ? "Доставка" : "Эскорт"} → ${c.destName} · ${fmtT(c.timeLeft)}`;
+        : c.kind === "bounty"
+          ? `КОНТРАКТ · Головы ${c.done}/${c.need} · ${fmtT(c.timeLeft)}`
+          : `КОНТРАКТ · ${c.kind === "transport" ? "Доставка" : "Эскорт"} → ${c.destName} · ${fmtT(c.timeLeft)}`;
     } else if (this.raid && this.raid.timeLeft > 0) {
       const r = this.raid;
       base = `НАЛЁТ · ${this.systemName(r.targetId)} · складов ${r.grabbed.length} · ${fmtT(r.timeLeft)}`;
@@ -1774,11 +1834,13 @@ export class Game {
     const p = this.ships[0];
     if (this.contract) {
       const c = this.contract;
-      if (c.kind === "hunt") {
+      // hunt chases pirates, clan bounty chases patrols — same nearest-prey scan (6b)
+      if (c.kind === "hunt" || c.kind === "bounty") {
+        const prey: Faction = c.kind === "hunt" ? "pirate" : "patrol";
         let best: Ship | null = null, bd = Infinity;
         for (let i = 1; i < MAX_SHIPS; i++) {
           const s = this.ships[i];
-          if (!s.active || s.faction !== "pirate") continue;
+          if (!s.active || s.faction !== prey) continue;
           const dd = Math.hypot(s.x - p.x, s.y - p.y);
           if (dd < bd) { bd = dd; best = s; }
         }

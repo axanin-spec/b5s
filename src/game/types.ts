@@ -144,12 +144,15 @@ export type RepState = { patrol: number; trader: number; clan: number };
 /* Contracts (station quests)                                          */
 /* ------------------------------------------------------------------ */
 
-export type ContractKind = "hunt" | "transport" | "escort";
+/** bounty (Этап 6b) is a clan-board hit on patrols — the clan's own kind of hunt. */
+export type ContractKind = "hunt" | "transport" | "escort" | "bounty";
 
 /** What the station broker offers; one contract may be active at a time. */
 export interface ContractOffer {
   id: number;
   kind: ContractKind;
+  /** Whose treasury pays and whose standings move: Alliance broker or clan board (6b). */
+  funder: "alliance" | "clan";
   title: string;
   desc: string;
   reward: number;
@@ -261,6 +264,8 @@ export interface SaveGame {
     id: number; kind: ContractKind; title: string; desc: string;
     reward: number; timeLeft: number; need: number; done: number;
     goodId: string; qty: number; destId: string; destName: string;
+    /** optional: v7 saves written before 6b default to the Alliance board. */
+    funder?: "alliance" | "clan";
   } | null;
   /** Price fluctuation multipliers per dockable id. */
   fluct: Record<string, Record<string, number>>;

@@ -53,7 +53,9 @@ export function loadSave(): SaveGame | null {
   if (s.contract !== null && s.contract !== undefined) {
     const c = s.contract;
     if (typeof c !== "object") return null;
-    if ((c.kind !== "hunt" && c.kind !== "transport") || !isNum(c.reward) || !isNum(c.timeLeft)) return null;
+    if ((c.kind !== "hunt" && c.kind !== "transport" && c.kind !== "bounty") || !isNum(c.reward) || !isNum(c.timeLeft)) return null;
+    // 6b: clan-board contracts carry their funder; absent = Alliance (pre-6b v7 saves)
+    if (c.funder !== undefined && c.funder !== "alliance" && c.funder !== "clan") return null;
     if (!isNum(c.done) || !isNum(c.need) || !isNum(c.id) || !isNum(c.qty)) return null;
     if (typeof c.title !== "string" || typeof c.destId !== "string") return null;
   }

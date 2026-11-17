@@ -341,11 +341,12 @@ export const PIRATE_BRANCH = {
    *  ≤ UNFRIENDLY — с чужака не гонят товар, но и любви нет. */
   BLACK_FRIEND: { buy: 0.82, sell: 1.2 },
   BLACK_COLD: { buy: 0.97, sell: 1.02 },
-  /** Клановая доска заданий в оккупированной системе и на базе. */
+  /** Клановая доска заданий в оккупированной системе и на базе. Ключи — kind'и
+   *  контрактов: hunt (разборки), bounty (головы патруля), transport (смуггл-рейс). */
   CONTRACT_REP: {
-    grip: { clan: 8, patrol: -4, trader: -2 },
+    hunt: { clan: 8, patrol: -4, trader: -2 },
     bounty: { clan: 10, patrol: -10 },
-    run: { clan: 9, trader: -3 },
+    transport: { clan: 9, trader: -3 },
   },
   /** Провал клановой работы — кланы запоминают. */
   CONTRACT_FAIL_REP: { clan: -5 },

@@ -885,6 +885,7 @@ kbd {
 .contract-badge.hunt { background: #ff5a4a; color: #fff; }
 .contract-badge.transport { background: #ffd24a; }
 .contract-badge.escort { background: #54ffd2; }
+.contract-badge.bounty { background: #d26aff; color: #140a1c; }
 
 .contract-title {
   font-size: 15px;
