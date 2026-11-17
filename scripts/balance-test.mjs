@@ -148,7 +148,7 @@ const saved = await page.evaluate(() => {
   return { a, sv: sv ? { pools: sv.pools, credits: sv.player.credits, v: sv.v, raid: sv.raid } : null };
 });
 const near = (x, y) => Math.abs(x - y) < 1.5;
-const roundTrip = !!saved.sv && saved.sv.v === 6 && saved.sv.raid === null
+const roundTrip = !!saved.sv && saved.sv.v === 7 && saved.sv.raid === null
   && near(saved.sv.pools.alliance, saved.a.pools.alliance + saved.a.traderFloat)
   && ["patrol", "clan", "stations"].every((k) => near(saved.sv.pools[k], saved.a.pools[k]))
   && near(saved.sv.credits, saved.a.player);

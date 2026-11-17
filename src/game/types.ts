@@ -134,8 +134,11 @@ export type UpgradeId = "engine" | "hull" | "shield" | "weapon" | "cargo";
 
 export type UpgradeLevels = Record<UpgradeId, number>; // 0..4
 
-/** Faction standings, −100..100. Pirates keep no score — they shoot anyway. */
-export type RepState = { patrol: number; trader: number };
+/**
+ * Faction standings, −100..100. The clan axis (Этап 6) is the pirate branch:
+ * black-market brackets, clan contracts and the smuggler base read it.
+ */
+export type RepState = { patrol: number; trader: number; clan: number };
 
 /* ------------------------------------------------------------------ */
 /* Contracts (station quests)                                          */

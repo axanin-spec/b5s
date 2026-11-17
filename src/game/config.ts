@@ -104,8 +104,8 @@ export const OCCUPATION = {
   BLACK: { buy: 0.9, sell: 1.12 },
   /** Flat patrol bounty paid on liberation. */
   LIBERATION_REWARD: 4000,
-  /** Standing gain shared by patrol + Alliance when a system is freed. */
-  REP_LIBERATE: { patrol: 10, trader: 10 },
+  /** Standing shift when a system is freed: the law cheers, the clans lose turf. */
+  REP_LIBERATE: { patrol: 10, trader: 10, clan: -10 },
   /** Flagships destroyed to break the pirate threat (economic victory still stands). */
   FLAGSHIPS_TO_WIN: 3,
 } as const;
@@ -274,11 +274,11 @@ export const REP = {
   /** {buy, sell} price multipliers for the friendly/unfriendly brackets. */
   PRICE_FRIENDLY: { buy: 0.93, sell: 1.06 },
   PRICE_UNFRIENDLY: { buy: 1.12, sell: 0.9 },
-  /** Standing changes for player kills. */
+  /** Standing changes for player kills (clan axis — Этап 6: crews are kin, patrols are prey). */
   KILL: {
-    pirate: { patrol: 2, trader: 1 },
-    trader: { patrol: -6, trader: -12 },
-    patrol: { patrol: -30, trader: -2 },
+    pirate: { patrol: 2, trader: 1, clan: -6 },
+    trader: { patrol: -6, trader: -12, clan: 1 },
+    patrol: { patrol: -30, trader: -2, clan: 5 },
   },
   /** Standing labels indexed by bracket: ≤-60, ≤-20, <20, <60, ≥60. */
   LABELS: ["ВРАЖДА", "НАПРЯЖЁННЫЕ", "НЕЙТРАЛИТЕТ", "ДРУЖЕЛЮБИЕ", "СОЮЗ"] as const,
@@ -286,7 +286,7 @@ export const REP = {
   PARDON_KILLS: 6,
   /** Patrol tribunal: fine = BASE + PER_POINT·(points below 0) + OUTLAW_FEE while wanted.
    *  Ends the hunt outright: lifts the outlaw flag and lifts patrol back above HOSTILE_PATROL. */
-  FINE: { BASE: 600, PER_POINT: 40, OUTLAW_FEE: 900, GAIN: 15, TRADER_GAIN: 3 },
+  FINE: { BASE: 600, PER_POINT: 40, OUTLAW_FEE: 900, GAIN: 15, TRADER_GAIN: 3, CLAN_GAIN: -4 },
 } as const;
 
 export function repLabel(v: number): string {
@@ -328,6 +328,34 @@ export const CONVOY = {
   NEED: 2,
   REWARD: 850,
   REP: { patrol: 5, trader: 9 },
+} as const;
+
+/* ------------------------------------------------------------------ */
+/* Пиратская ветка (Этап 6): клановая репутация, «свой» скид, база     */
+/* ------------------------------------------------------------------ */
+
+export const PIRATE_BRANCH = {
+  /** Репутация у кланов за каждый опустошенный склад налёта: им приятно топить Альянс. */
+  REP_RAID_GRAB: { clan: 4 },
+  /** «Свой» на чёрном рынке: clan ≥ FRIENDLY покупает дешевле и продаёт жирнее;
+   *  ≤ UNFRIENDLY — с чужака не гонят товар, но и любви нет. */
+  BLACK_FRIEND: { buy: 0.82, sell: 1.2 },
+  BLACK_COLD: { buy: 0.97, sell: 1.02 },
+  /** Клановая доска заданий в оккупированной системе и на базе. */
+  CONTRACT_REP: {
+    grip: { clan: 8, patrol: -4, trader: -2 },
+    bounty: { clan: 10, patrol: -10 },
+    run: { clan: 9, trader: -3 },
+  },
+  /** Провал клановой работы — кланы запоминают. */
+  CONTRACT_FAIL_REP: { clan: -5 },
+  /** База контрабандистов в руинах Терминуса. */
+  LAIR: {
+    id: "lair",
+    name: "База «Расколотый кокон»",
+    /** Ремонт в норах дешевле: ни доков, ни реестра. */
+    REPAIR_FACTOR: 0.6,
+  },
 } as const;
 
 /* ------------------------------------------------------------------ */
@@ -380,7 +408,8 @@ export const REPAIR_COST_PER_HP = 6;
 
 export const SAVE_KEY = "savegame";
 // v6: closed money pools (pools + player = MONEY_TOTAL); older saves are rejected
-export const SAVE_VERSION = 6;
+/** v7: added the clan standing (Этап 6). Older saves are rejected, not migrated. */
+export const SAVE_VERSION = 7;
 export const AUTOSAVE_INTERVAL = 30;
 
 /* ------------------------------------------------------------------ */

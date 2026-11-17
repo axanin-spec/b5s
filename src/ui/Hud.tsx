@@ -143,6 +143,9 @@ export function Hud({ snap, isTouch }: { snap: Snapshot; isTouch: boolean }) {
           <span className={`rep-chip ${hud.rep.trader <= REP.UNFRIENDLY ? 'bad' : hud.rep.trader >= REP.FRIENDLY ? 'good' : ''}`}>
             Альянс {hud.rep.trader > 0 ? '+' : ''}{Math.round(hud.rep.trader)}
           </span>
+          <span className={`rep-chip clan ${hud.rep.clan <= REP.UNFRIENDLY ? 'bad' : hud.rep.clan >= REP.FRIENDLY ? 'good' : ''}`}>
+            Кланы {hud.rep.clan > 0 ? '+' : ''}{Math.round(hud.rep.clan)}
+          </span>
         </div>
         {hud.wanted && (
           <div className="hud-outlaw">

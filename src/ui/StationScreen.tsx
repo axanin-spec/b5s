@@ -103,6 +103,7 @@ export function StationScreen({ s }: { s: StationSnapshot }) {
                 <div className="rep-title">Репутация во фракциях</div>
                 <RepBar name="Патруль" v={s.reputation.patrol} />
                 <RepBar name="Торговый альянс" v={s.reputation.trader} />
+                <RepBar name="Пиратские кланы" v={s.reputation.clan} />
                 <div className="trade-note">
                   Союзным рейнджерам патруль не стреляет, а Альянс делает скидки на товары.
                   Сбитые конвои и гражданские топят репутацию — патруль может объявить охоту и без статуса изгоя.

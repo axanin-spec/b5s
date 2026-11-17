@@ -6,7 +6,7 @@
  */
 
 import {
-  BOLT_CFG, CONTRACTS, CONVOY, ECONOMY, FACTION_CFG, GATE_CFG, GOODS, OCCUPATION, PIRATE_ECON, PLAYER_CFG, POPULATION, QUALITY, RAID,
+  BOLT_CFG, CONTRACTS, CONVOY, ECONOMY, FACTION_CFG, GATE_CFG, GOODS, OCCUPATION, PIRATE_BRANCH, PIRATE_ECON, PLAYER_CFG, POPULATION, QUALITY, RAID,
   MONEY_TOTAL, POOLS, REPAIR_COST_PER_HP, REP, SAVE_VERSION, AUTOSAVE_INTERVAL, SHIELD_REGEN, SYSTEMS, TRADER_AI, UPGRADE_DEFS,
   VICTORY_SHARE, WEAPON_RATE, WEAPON_SHOTS, WORLD_CFG,
 } from "./config";
@@ -228,7 +228,7 @@ export class Game {
     return {
       credits: PLAYER_CFG.START_CREDITS,
       cargo: {}, upgrades: { engine: 0, hull: 0, shield: 0, weapon: 0, cargo: 0 },
-      outlaw: false, pardons: 0, rep: { patrol: 0, trader: 0 },
+      outlaw: false, pardons: 0, rep: { patrol: 0, trader: 0, clan: 0 },
       kills: 0, earned: 0, traded: 0, playTime: 0,
       bossKills: 0, victoryShown: false,
     };
@@ -1396,12 +1396,18 @@ export class Game {
   /**
    * Live trade multipliers: reputation bracket + black-market skew when the clans
    * hold the system. Single source of truth — the terminal and the till must agree.
+   * On clan turf the clan standing bends the skew too (Этап 6): «свои» buy at 0.82
+   * and sell at 1.2; cold standing flattens the black-market bonus to a rounding.
    */
   private priceMods(): { buy: number; sell: number } {
     const tm = this.tradeMod();
-    return this.dockTarget && this.hereOccupied()
-      ? { buy: tm.buy * OCCUPATION.BLACK.buy, sell: tm.sell * OCCUPATION.BLACK.sell }
-      : tm;
+    if (this.dockTarget && (this.hereOccupied() || this.dockTarget.id === PIRATE_BRANCH.LAIR.id)) {
+      const b = this.player.rep.clan >= REP.FRIENDLY ? PIRATE_BRANCH.BLACK_FRIEND
+        : this.player.rep.clan <= REP.UNFRIENDLY ? PIRATE_BRANCH.BLACK_COLD
+        : OCCUPATION.BLACK;
+      return { buy: tm.buy * b.buy, sell: tm.sell * b.sell };
+    }
+    return tm;
   }
 
   buy(goodId: string, qty: number): void {
@@ -1518,10 +1524,11 @@ export class Game {
     return f === "boss" ? "#d26aff" : "#ffd24a";
   }
 
-  private addRep(d: { patrol?: number; trader?: number }): void {
+  private addRep(d: { patrol?: number; trader?: number; clan?: number }): void {
     const r = this.player.rep;
     if (d.patrol) r.patrol = Math.max(REP.MIN, Math.min(REP.MAX, r.patrol + d.patrol));
     if (d.trader) r.trader = Math.max(REP.MIN, Math.min(REP.MAX, r.trader + d.trader));
+    if (d.clan) r.clan = Math.max(REP.MIN, Math.min(REP.MAX, r.clan + d.clan));
     this.syncPirateStatus();
   }
 
@@ -1549,6 +1556,7 @@ export class Game {
     // the tribunal receipt ends the hunt outright: standing jumps back above the vendetta line
     r.patrol = Math.min(REP.MAX, Math.max(r.patrol + REP.FINE.GAIN, REP.HOSTILE_PATROL + 1));
     r.trader = Math.min(REP.MAX, r.trader + REP.FINE.TRADER_GAIN);
+    this.addRep({ clan: REP.FINE.CLAN_GAIN }); // the clans don't forgive a handshake with the law
     this.player.outlaw = false;
     this.player.pardons = 0;
     this.audio.sfx("trade");
@@ -2189,6 +2197,8 @@ export class Game {
     r.taken += total;
     this.player.earned += total;
     this.grabTarget = null; this.grabT = 0;
+    // the clans applaud every sagging Alliance warehouse (Этап 6)
+    this.addRep(PIRATE_BRANCH.REP_RAID_GRAB);
     // embargo: the raids spook trade — every market in the system sags
     for (const dd of this.dockables) for (const g of GOODS) this.pushFluct(dd, g.id, -RAID.EMBARGO_PUSH);
     if (r.grabbed.length === 1) {
@@ -3147,7 +3157,11 @@ export class Game {
       wanted: this.patrolHostile(),
       outlaw: this.player.outlaw,
       pardons: this.player.pardons,
-      priceNote: occupied ? "Чёрный рынок: краденое берут с руками, вопросов не задают"
+      priceNote: occupied ? (this.player.rep.clan >= REP.FRIENDLY
+        ? "Чёрный рынок: вы здесь «свой» — берут дешевле, платят жирнее"
+        : this.player.rep.clan <= REP.UNFRIENDLY
+          ? "Чёрный рынок: кланы вам не доверяют — цены впритык"
+          : "Чёрный рынок: краденое берут с руками, вопросов не задают")
         : mod.buy < 1 ? "Союзная скидка — Альянс помнит ваши услуги"
         : mod.buy > 1 ? "Враждебные цены — репутация в Альянсе на дне" : null,
       contracts: this.offers.map((o) => ({ id: o.id, kind: o.kind, title: o.title, desc: o.desc, reward: o.reward, timeLimit: o.timeLimit })),
@@ -3442,6 +3456,12 @@ export class Game {
         }
         this.syncPirateStatus();
         return this.isPirate();
+      },
+      // set an exact rep axis (6a probes): clamps like addRep does, resyncs pirate status
+      rep: (k: "patrol" | "trader" | "clan", v: number) => {
+        this.player.rep[k] = Math.max(REP.MIN, Math.min(REP.MAX, v));
+        this.syncPirateStatus();
+        return { ...this.player.rep };
       },
     };
     window.__gameProbe = () => {

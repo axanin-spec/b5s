@@ -17,7 +17,7 @@ export interface HudData {
   kills: number;
   outlaw: boolean;
   /** Faction standings for the always-on HUD reputation chips. */
-  rep: { patrol: number; trader: number };
+  rep: { patrol: number; trader: number; clan: number };
   /** Patrol shoots on sight (outlaw flag or vendetta standing). */
   wanted: boolean;
   /** Atonement pirate-kills counted toward lifting an active wanted flag. */
@@ -83,7 +83,7 @@ export interface StationSnapshot {
   hull: number; maxHull: number;
   repairCost: number;
   /** Faction standings −100..100 for the reputation panel. */
-  reputation: { patrol: number; trader: number };
+  reputation: { patrol: number; trader: number; clan: number };
   /** Patrol tribunal tariff to clear charges (see REP.FINE). */
   fineCost: number;
   wanted: boolean;

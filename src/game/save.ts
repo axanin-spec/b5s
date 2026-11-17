@@ -46,8 +46,9 @@ export function loadSave(): SaveGame | null {
   if (!isNum(p.hull) || !isNum(p.shield) || !isBool(p.outlaw)) return null;
   if (!isNum(p.pardons) || p.pardons < 0) return null;
   if (!validCargo(p.cargo) || !validUpgrades(p.upgrades)) return null;
+  // v7: the clan standing joined the ledger (Этап 6) — older saves lack it and are rejected
   const rep = p.rep;
-  if (typeof rep !== "object" || rep === null || !isNum(rep.patrol) || !isNum(rep.trader)) return null;
+  if (typeof rep !== "object" || rep === null || !isNum(rep.patrol) || !isNum(rep.trader) || !isNum(rep.clan)) return null;
   // contract is optional (v3 added it): null/undefined = accepted, anything else must be shaped
   if (s.contract !== null && s.contract !== undefined) {
     const c = s.contract;

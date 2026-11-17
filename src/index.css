@@ -285,6 +285,8 @@ kbd {
   color: #b8d8d0;
   background: rgba(10, 25, 32, 0.55);
 }
+/* clan chip: purple when neutral — good/bad brackets below still win */
+.rep-chip.clan { color: #d9a6ff; border-color: rgba(210, 106, 255, 0.45); }
 .rep-chip.good { color: #7dffe0; border-color: rgba(84, 255, 210, 0.5); }
 .rep-chip.bad { color: #ff8a7d; border-color: rgba(255, 90, 74, 0.6); }
 
