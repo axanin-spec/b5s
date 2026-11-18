@@ -6,7 +6,7 @@
  */
 
 import {
-  BOLT_CFG, CONTRACTS, CONVOY, ECONOMY, EMERGENCY_PULSE, EQUIP, EQUIP_LINES, EQUIP_SELL, FACTION_CFG, GATE_CFG, GOODS, HULLS, HULL_SELL, OCCUPATION, PIRATE_BRANCH, PIRATE_ECON, PLAYER_CFG, POPULATION, QUALITY, RANKS, RAID,
+  BOLT_CFG, CONTRACTS, CONVOY, ECONOMY, EMERGENCY_PULSE, EQUIP, EQUIP_LINES, EQUIP_SELL, FACTION_CFG, GATE_CFG, GOODS, HULLS, HULL_SELL, MODULE_LOOT, OCCUPATION, PIRATE_BRANCH, PIRATE_ECON, PLAYER_CFG, POPULATION, QUALITY, RANKS, RAID,
   MONEY_TOTAL, POOLS, REPAIR_COST_PER_HP, REP, SAVE_VERSION, AUTOSAVE_INTERVAL, SMUGGLER, STARTER_KIT, SYSTEMS, TRADER_AI,
   VICTORY_SHARE, WORLD_CFG,
 } from "./config";
@@ -45,7 +45,7 @@ function blankShip(): Ship {
     dmg: 0, fireRate: 0, fireCooldown: 0, sinceHit: 99,
     ai: AiState.Wander, targetIdx: -1, tx: 0, ty: 0, wanderT: 0,
     routeFrom: 0, routeTo: 0, name: "", wallet: 0, smuggler: false, cargo: {},
-    escortId: -1, raidId: -1, raidGuard: false, thinkT: 0, thinkDt: 0.42, trailT: 0, regroupT: 0, regroupUsed: false, sprite: null,
+    escortId: -1, raidId: -1, raidGuard: false, screen: false, thinkT: 0, thinkDt: 0.42, trailT: 0, regroupT: 0, regroupUsed: false, sprite: null,
   };
 }
 
@@ -819,7 +819,8 @@ export class Game {
     this.bossEscortsSpawned = false;
     for (let k = 0; k < OCCUPATION.ESCORTS; k++) {
       const ea = (k / OCCUPATION.ESCORTS) * Math.PI * 2;
-      this.spawnShip("pirate", x + Math.cos(ea) * 420, y + Math.sin(ea) * 420);
+      const ei = this.spawnShip("pirate", x + Math.cos(ea) * 420, y + Math.sin(ea) * 420);
+      if (ei >= 0) this.ships[ei].screen = true; // the flagship's screen carries real gear (Этап 11a)
     }
     this.setNews(`⚑ Флагман кланов вышел навстречу над ${this.systemDef.name}!`);
     this.audio.sfx("alarm");
@@ -949,6 +950,13 @@ export class Game {
       this.spawnPickup("cargo", GOODS[Math.floor(this.rnd() * GOODS.length)].id,
         2 + Math.floor(this.rnd() * 6), s.x + (this.rnd() - 0.5) * 160, s.y + (this.rnd() - 0.5) * 160);
     }
+    // trophy module (Этап 11a): capped ranks guard the yard economy — SSS never drops
+    const dropKey = s.faction === "boss" ? "boss"
+      : s.faction === "pirate" ? (s.screen ? "screen" : s.raidId >= 0 ? "raider" : "pirate") : null;
+    if (dropKey && this.rnd() < MODULE_LOOT.CHANCE[dropKey]) {
+      const item = this.rollModuleDrop(MODULE_LOOT.RANK_CAP[dropKey], dropKey === "screen" || dropKey === "boss");
+      if (item) this.spawnPickup("module", item.id, 1, s.x + (this.rnd() - 0.5) * 120, s.y + (this.rnd() - 0.5) * 120);
+    }
     // Every sunken hull writes off the clan fund: the clans pay the civilian yards for
     // a replacement (5c). The fund thins — the spawner posts fewer pirates back in line.
     if (s.faction === "pirate" || s.faction === "boss") {
@@ -1045,7 +1053,20 @@ export class Game {
     }
   }
 
-  private spawnPickup(kind: "credits" | "cargo", goodId: string, amount: number, x: number, y: number, src: PoolId = "clan"): void {
+  /**
+   * Roll a trophy module (Этап 11a): uniform rank 0..cap (SSS excluded by the cap),
+   * flag-class lines (Сингулярность/Цитадель) only from the flagship's screen —
+   * rank-and-file pirates fly yard-sale junk.
+   */
+  private rollModuleDrop(rankCap: number, allowFlag: boolean): EquipItem | null {
+    const lines = EQUIP_LINES.filter((l) => allowFlag || l.yard !== "flag");
+    if (!lines.length) return null;
+    const line = lines[Math.floor(this.rnd() * lines.length)];
+    const rankIdx = Math.floor(this.rnd() * (Math.min(rankCap, RANKS.length - 2) + 1)); // SSS stays out
+    return EQUIP[`${line.id}-${RANKS[rankIdx]}`] ?? null;
+  }
+
+  private spawnPickup(kind: "credits" | "cargo" | "module", goodId: string, amount: number, x: number, y: number, src: PoolId = "clan"): void {
     for (let i = 0; i < MAX_PICKUPS; i++) {
       const p = this.pickups[i];
       if (p.active) continue;
@@ -2840,8 +2861,10 @@ export class Game {
         }
         if (!this.bossEscortsSpawned && s.hp < s.maxHp * 0.5) {
           this.bossEscortsSpawned = true;
-          this.spawnShip("pirate", s.x + 260, s.y);
-          this.spawnShip("pirate", s.x - 260, s.y);
+          const e1 = this.spawnShip("pirate", s.x + 260, s.y);
+          const e2 = this.spawnShip("pirate", s.x - 260, s.y);
+          if (e1 >= 0) this.ships[e1].screen = true;
+          if (e2 >= 0) this.ships[e2].screen = true;
           this.setNews("Флагман вызвал подкрепление!");
         }
       }
@@ -3089,6 +3112,21 @@ export class Game {
           this.player.earned += paid;
           this.audio.sfx("credits");
           if (paid > 0) this.floater(pk.x, pk.y, `+₡${Math.round(paid)}`, "#ffd24a");
+          pk.active = false;
+        } else if (pk.kind === "module") {
+          // trophy module (Этап 11a): into the stash — or sold on the spot when it's full
+          const item = EQUIP[pk.goodId];
+          if (!item) { pk.active = false; continue; }
+          if (this.player.stash.length < MODULE_LOOT.STASH_MAX) {
+            this.player.stash.push(pk.goodId);
+            this.audio.sfx("pickup");
+            this.floater(pk.x, pk.y, `⚙ ${item.name}`, "#b46aff");
+            this.setNews(`Трофей с обломков: ${item.name} — на склад.`);
+          } else {
+            const v = this.gain(Math.round(item.cost * EQUIP_SELL), "stations");
+            this.audio.sfx("credits");
+            if (v > 0) this.floater(pk.x, pk.y, `+₡${Math.round(v)}`, "#ffd24a");
+          }
           pk.active = false;
         } else if (this.cargoUsed() < this.cargoMax()) {
           this.player.cargo[pk.goodId] = (this.player.cargo[pk.goodId] ?? 0) + pk.amount;
@@ -3990,6 +4028,9 @@ export class Game {
         return this.player.credits;
       },
       stations: () => this.dockables.filter((d) => d.isStation).map((d) => ({ id: d.id, kind: d.kind, name: d.name })),
+      // трофейные поддоны (Этап 11a): живые пикапы в мире — вид, id, позиция
+      pickups: () => this.pickups.filter((pk) => pk.active)
+        .map((pk) => ({ kind: pk.kind, goodId: pk.goodId, amount: pk.amount, x: Math.round(pk.x), y: Math.round(pk.y) })),
       // клановые бортники (Этап 8): маршрут/ИИ/кошелёк + не целится ли в них пират
       smugglers: () => this.ships
         .map((s, i) => ({ s, i }))

@@ -12,6 +12,7 @@
     "balance": "node scripts/balance-test.mjs",
     "fleet": "node scripts/fleet-test.mjs",
     "smuggle": "node scripts/smuggle-test.mjs",
+    "loot": "node scripts/loot-test.mjs",
     "focus": "node scripts/focus-test.mjs"
   },
   "dependencies": {

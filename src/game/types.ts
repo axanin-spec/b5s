@@ -53,6 +53,8 @@ export interface Ship {
   escortId: number;
   /** Convoy-raid event this ship belongs to (event id, -1 = none). */
   raidId: number;
+  /** Member of the flagship's escort screen (Этап 11a) — its wreck drops real gear. */
+  screen: boolean;
   /** Patrol escort raised by the player's raid operation (Этап 5d) — stands down when it ends. */
   raidGuard: boolean;
   /** Escort/flee bookkeeping. */
@@ -96,8 +98,9 @@ export interface Bolt {
 
 export interface Pickup {
   active: boolean;
-  kind: "credits" | "cargo";
-  /** Credit drops are paid out of this pool when collected (cargo pods: unused). */
+  /** module (Этап 11a): goodId carries the EquipItem id — collected into the stash. */
+  kind: "credits" | "cargo" | "module";
+  /** Credit drops are paid out of this pool when collected (cargo/module pods: unused). */
   src: PoolId;
   goodId: string;
   amount: number;
