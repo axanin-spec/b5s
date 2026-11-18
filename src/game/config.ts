@@ -243,6 +243,10 @@ export const ECONOMY = {
    *  Half-life ≈ 23 ticks (~7 min): caravans, raids and luck bend prices,
    *  but a system's wealth profile always reasserts itself. */
   ANCHOR_PULL: 0.03,
+  /** Price push per unit from the player's own dock trades — half the caravan
+   *  strength (TRADER_AI.FLUCT_PUSH): one captain moves a market less than a
+   *  supply chain, but a battleship hold dumped at once is felt. */
+  PLAYER_FLUCT_PUSH: 0.002,
 } as const;
 
 /* ------------------------------------------------------------------ */

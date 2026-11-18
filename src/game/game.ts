@@ -1510,6 +1510,8 @@ export class Game {
     this.pay(n * price, this.tradePool());
     this.player.cargo[goodId] = (this.player.cargo[goodId] ?? 0) + n;
     this.player.traded += n * price;
+    // player volume moves the local market too (half caravan strength): buying lifts the price
+    this.pushFluct(d, goodId, ECONOMY.PLAYER_FLUCT_PUSH * n);
     this.audio.sfx("trade");
     this.pushStation();
     this.pushHud();
@@ -1536,6 +1538,8 @@ export class Game {
     const paid = this.gain(payout, pool);
     this.player.earned += paid;
     this.player.traded += paid;
+    // dumping a hold sags the local price — the next hold of the same good pays less
+    this.pushFluct(d, goodId, -ECONOMY.PLAYER_FLUCT_PUSH * n);
     this.audio.sfx("credits");
     this.pushStation();
     this.pushHud();
