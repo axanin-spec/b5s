@@ -6,7 +6,7 @@
  */
 
 import {
-  BOLT_CFG, CONTRACTS, CONVOY, ECONOMY, EMERGENCY_PULSE, EQUIP, EQUIP_LINES, EQUIP_SELL, FACTION_CFG, GATE_CFG, GOODS, HULLS, HULL_SELL, MODULE_LOOT, OCCUPATION, PIRATE_BRANCH, PIRATE_ECON, PLAYER_CFG, POPULATION, QUALITY, RANKS, RAID,
+  BOLT_CFG, CONTRACTS, CONVOY, ECONOMY, EMERGENCY_PULSE, EQUIP, EQUIP_LINES, EQUIP_SELL, FACTION_CFG, GATE_CFG, GOODS, HULLS, HULL_SELL, MODULE_LOOT, OCCUPATION, PATROL_ECON, PIRATE_BRANCH, PIRATE_ECON, PLAYER_CFG, POPULATION, QUALITY, RANKS, RAID,
   MONEY_TOTAL, POOLS, REPAIR_COST_PER_HP, REP, SAVE_VERSION, AUTOSAVE_INTERVAL, SMUGGLER, STARTER_KIT, SYSTEMS, TRADER_AI,
   VICTORY_SHARE, WORLD_CFG,
 } from "./config";
@@ -45,7 +45,7 @@ function blankShip(): Ship {
     dmg: 0, fireRate: 0, fireCooldown: 0, sinceHit: 99,
     ai: AiState.Wander, targetIdx: -1, tx: 0, ty: 0, wanderT: 0,
     routeFrom: 0, routeTo: 0, name: "", wallet: 0, smuggler: false, cargo: {},
-    escortId: -1, raidId: -1, raidGuard: false, screen: false, thinkT: 0, thinkDt: 0.42, trailT: 0, regroupT: 0, regroupUsed: false, sprite: null,
+    escortId: -1, raidId: -1, raidGuard: false, screen: false, cruiser: false, thinkT: 0, thinkDt: 0.42, trailT: 0, regroupT: 0, regroupUsed: false, sprite: null,
   };
 }
 
@@ -264,6 +264,7 @@ export class Game {
       patrol: [makeShipTexture("patrol", 0), makeShipTexture("patrol", 1)],
       trader: [makeShipTexture("trader", 0), makeShipTexture("trader", 1)],
       boss: [makeShipTexture("boss")],
+      cruiser: [makeShipTexture("cruiser")],
     };
 
     this.buildBackground();
@@ -788,6 +789,28 @@ export class Game {
     this.pickSmugglerRoute(idx);
   }
 
+  /**
+   * Heavy cruiser «Варта» (Этап 11b): commissioned when the watch treasury is fat.
+   * A patrol hull with the stats overriden from PATROL_ECON.CRUISER; despawns only
+   * by dying — a drained treasury stops the replacement, not the ship itself.
+   */
+  private spawnCruiser(): void {
+    if (!this.dockables.length) return;
+    const d = this.dockables[Math.floor(this.rnd() * this.dockables.length)];
+    const a = this.rnd() * Math.PI * 2;
+    const idx = this.spawnShip("patrol", d.x + Math.cos(a) * 600, d.y + Math.sin(a) * 600);
+    if (idx < 0) return;
+    const s = this.ships[idx];
+    const c = PATROL_ECON.CRUISER;
+    s.hp = s.maxHp = c.hp;
+    s.shield = s.maxShield = c.shield;
+    s.accel = c.accel; s.maxSpeed = c.maxSpeed;
+    s.dmg = c.dmg; s.fireRate = c.fireRate;
+    s.radius = c.radius;
+    s.cruiser = true;
+    s.name = "Варта";
+  }
+
   /** One leg of the grey route: the lair in Terminus, a black-market dock in occupied space. */
   private pickSmugglerRoute(idx: number): void {
     const s = this.ships[idx];
@@ -924,7 +947,9 @@ export class Game {
     // for its freight, the patrol for its hulls (closed circulation, Этап 5a)
     const cfg = FACTION_CFG[s.faction as keyof typeof FACTION_CFG];
     if (cfg && cfg.bounty[1] > 0 && s.faction !== "trader") {
-      const amount = Math.round(cfg.bounty[0] + this.rnd() * (cfg.bounty[1] - cfg.bounty[0]));
+      // the cruiser carries its own price on the hull (Этап 11b)
+      const bountyRange = s.cruiser ? PATROL_ECON.CRUISER.bounty : cfg.bounty;
+      const amount = Math.round(bountyRange[0] + this.rnd() * (bountyRange[1] - bountyRange[0]));
       // Pirate bounties come out of the patrol treasury (5c): an empty treasury makes
       // them "deflate" — gain() pays what little it has left. The flagship's ransom
       // is still clan money: the coffers of the occupation, captured with the wreck.
@@ -2736,6 +2761,16 @@ export class Game {
     return base + this.systemDef.pirateBoost + (this.hereOccupied() ? OCCUPATION.PIRATE_EXTRA : 0);
   }
 
+  /**
+   * Constabulary headcount (Этап 11b): base is per system, but a treasury below
+   * TREASURY_THIN means the watch can't pay full wages — the roster shrinks to a
+   * skeleton crew of THIN_PATROLS.
+   */
+  private patrolStrength(): number {
+    const base = POPULATION.PATROLS + (this.systemDef.patrolBoost ?? 0);
+    return this.pools.patrol < PATROL_ECON.TREASURY_THIN ? Math.min(base, PATROL_ECON.THIN_PATROLS) : base;
+  }
+
   private maintainPopulation(): void {
     let pirates = 0, patrols = 0, traders = 0;
     for (let i = 1; i < MAX_SHIPS; i++) {
@@ -2747,9 +2782,12 @@ export class Game {
     }
     const pirateCap = this.pirateStrength();
     if (pirates < pirateCap) this.spawnAtEdge("pirate");
-    // constabulary strength is per system: Aurora floods the band, Kar kinoks keeps it thin
-    const patrolCap = POPULATION.PATROLS + (this.systemDef.patrolBoost ?? 0);
+    // constabulary strength is per system, gated by the treasury (Этап 11b)
+    const patrolCap = this.patrolStrength();
     if (!this.hereOccupied() && patrols < patrolCap) this.spawnAtEdge("patrol");
+    // «Варта»: a fat treasury commissions one heavy cruiser for the system
+    if (!this.hereOccupied() && this.pools.patrol >= PATROL_ECON.TREASURY_FULL
+      && !this.ships.some((s) => s.active && s.cruiser)) this.spawnCruiser();
     if (traders < POPULATION.TRADERS) this.spawnAtEdge("trader");
     // clan haulers (Этап 8): the grey route breathes only around its endpoints
     if (this.smuggleHere()) {
@@ -2799,8 +2837,11 @@ export class Game {
       s.x += s.vx * dt;
       s.y += s.vy * dt;
 
-      // keep NPCs inside the world; fleeing pirates may leave (despawn)
-      if (Math.abs(s.x) > HALF * 1.25 || Math.abs(s.y) > HALF * 1.25) {
+      // keep NPCs inside the world; fleeing pirates may leave (despawn).
+      // Despawn is RADIAL: the flee waypoint sits at 1.4·HALF on an arbitrary bearing,
+      // so a square threshold strands corner-bound runners orbiting the rim forever.
+      if (Math.abs(s.x) > HALF * 1.25 || Math.abs(s.y) > HALF * 1.25
+        || Math.hypot(s.x, s.y) > HALF * 1.3) {
         // a pirate running for good leaves the system; a regrouping one stays clamped inside.
         // A clan hauler past the edge is through the gate — the run continues off-screen (Этап 8)
         if (s.smuggler) { this.freeShip(i); continue; }
@@ -3376,7 +3417,7 @@ export class Game {
       ctx.save();
       ctx.translate(x, y);
       ctx.rotate(Math.PI / 2 - s.angle); // texture points up; world angle θ → canvas rotation π/2 − θ
-      const texs = this.shipTexMap[s.faction];
+      const texs = s.cruiser ? this.shipTexMap.cruiser : this.shipTexMap[s.faction];
       ctx.drawImage(texs[texs.length > 1 ? i & 1 : 0], -scale / 2, -scale / 2, scale, scale);
       ctx.restore();
       // shield ring flash after recent hits
@@ -3904,6 +3945,18 @@ export class Game {
       strength: this.pirateStrength(),
       setFund: (v: number) => { this.pools.clan = Math.max(-PIRATE_ECON.DEBT_LIMIT, Math.min(MONEY_TOTAL, v)); },
     });
+    // watch treasury probe (Этап 11b): patrol roster thickness and the cruiser flag;
+    // setFund is a non-conserving debug setter for live checks
+    (window as unknown as Record<string, unknown>).__patrolEcon = () => {
+      const c = this.ships.find((s) => s.active && s.cruiser);
+      return {
+        fund: this.pools.patrol,
+        strength: this.patrolStrength(),
+        cruiserUp: !!c,
+        cruiser: c ? { hp: c.hp, maxHp: c.maxHp, shield: c.maxShield, name: c.name } : null,
+        setFund: (v: number) => { this.pools.patrol = Math.max(0, Math.min(MONEY_TOTAL, v)); },
+      };
+    };
     // raid operation probe (Этап 5d): read the ops desk, launch, and park the player
     // by a dock (non-simulating teleport for live checks — heist range requires proximity)
     (window as unknown as Record<string, unknown>).__raidOps = {
@@ -3962,7 +4015,9 @@ export class Game {
       patrolHunt: () => self.ships.filter((s) => s.active && s.faction === "patrol" && s.targetIdx === 0).length,
       // kill the first ship of a faction by player hands and park the player on the wreck
       kill: (f: string) => {
-        const i = self.ships.findIndex((s, j) => j > 0 && s.active && s.faction === f);
+        const i = f === "cruiser"
+          ? self.ships.findIndex((s) => s.active && s.cruiser)
+          : self.ships.findIndex((s, j) => j > 0 && s.active && s.faction === f);
         if (i < 0) return null;
         const at = { x: self.ships[i].x, y: self.ships[i].y };
         self.killShip(i, true);
@@ -4088,7 +4143,7 @@ export class Game {
       const s = this.ships[i];
       if (!s.active) continue;
       if (i === 0) { out.push({ x: s.x / HALF, y: s.y / HALF, c: "#ffffff", s: 4 }); continue; }
-      out.push({ x: s.x / HALF, y: s.y / HALF, c: this.blipColor(s.faction, s.smuggler), s: s.faction === "boss" ? 4 : 2 });
+      out.push({ x: s.x / HALF, y: s.y / HALF, c: this.blipColor(s.faction, s.smuggler), s: s.faction === "boss" ? 4 : s.cruiser ? 3 : 2 });
     }
     // plotted course ring under the objective marker
     if (this.waypoint) out.push({ x: this.waypoint.x / HALF, y: this.waypoint.y / HALF, c: "#54ffd2", s: 7, w: 1 });

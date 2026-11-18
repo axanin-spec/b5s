@@ -13,6 +13,7 @@
     "fleet": "node scripts/fleet-test.mjs",
     "smuggle": "node scripts/smuggle-test.mjs",
     "loot": "node scripts/loot-test.mjs",
+    "watch": "node scripts/watch-test.mjs",
     "focus": "node scripts/focus-test.mjs"
   },
   "dependencies": {

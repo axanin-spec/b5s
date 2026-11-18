@@ -162,6 +162,26 @@ export const PIRATE_ECON = {
 } as const;
 
 /* ------------------------------------------------------------------ */
+/* Patrol economy (Этап 11b): сила закона по казне                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Symmetry with the clans (PIRATE_ECON): pirate numbers scale with the clan fund,
+ * now the constabulary scales with its treasury. A fat treasury fields a heavy
+ * cruiser on top of the watch; a bled one (raids drain it, bounties deflate it)
+ * leaves the system on a skeleton watch — piracy has a visible price.
+ */
+export const PATROL_ECON = {
+  /** Treasury at/above this: the heavy cruiser «Варта» is on station (over the cap). */
+  TREASURY_FULL: 450_000,
+  /** Below this: thinned watch. */
+  TREASURY_THIN: 100_000,
+  THIN_PATROLS: 4,
+  /** Heavy cruiser stats — between a patrol cutter and the clan flagship. */
+  CRUISER: { hp: 450, shield: 220, accel: 260, maxSpeed: 300, dmg: 12, fireRate: 1.2, radius: 48, bounty: [2500, 4000] as const },
+} as const;
+
+/* ------------------------------------------------------------------ */
 /* Raid operation (Этап 5d: налёт — операция с карты)                   */
 /* ------------------------------------------------------------------ */
 

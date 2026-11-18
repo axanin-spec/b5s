@@ -106,11 +106,13 @@ const bossRun = await page.evaluate(() => {
   window.__sim.kill("boss");
   window.__sim.step(200);
   const after = window.__sim.ship().stash;
-  const drops = after.filter((id) => !before.includes(id));
-  return { bossUp, drops, delta: window.__econAudit().delta };
+  // флагман может уронить id, уже лежащий на складе с фазы пиратов, — считаем
+  // и по пополнению списка, и по росту длины (склад тут заведомо не полон)
+  const drops = after.filter((id, k) => !before.includes(id) || k >= before.length);
+  return { bossUp, drops, grew: after.length - before.length, delta: window.__econAudit().delta };
 });
 const okBossUp = bossRun.bossUp;
-const okBossDrop = bossRun.drops.length >= 1;
+const okBossDrop = bossRun.drops.length >= 1 && bossRun.grew >= 1;
 const okNoSSS = [...pirateRun.drops, ...bossRun.drops].every((id) => rankOf(id) !== "SSS");
 
 // ── 3. полный склад: конвертация в кредиты, склад не растёт, инвариант цел ──

@@ -61,7 +61,7 @@ function glow(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, co
 /* Ships — drawn pointing UP (+y screen); rotation happens on the sprite */
 /* ------------------------------------------------------------------ */
 
-export type ShipStyle = "player" | "pirate" | "patrol" | "trader" | "boss";
+export type ShipStyle = "player" | "pirate" | "patrol" | "trader" | "boss" | "cruiser";
 
 /**
  * Player fit (Этап 7) driving the hull art: `hull` = index in HULLS (selects the
@@ -76,13 +76,15 @@ const SHIP_COLORS: Record<ShipStyle, { hull: string; trim: string; glow: string;
   patrol: { hull: "#7fb4ff", trim: "#2b4f8f", glow: "#7fd0ff", cockpit: "#eaf4ff" },
   trader: { hull: "#e8c96a", trim: "#8f742e", glow: "#ffe29b", cockpit: "#fff6d9" },
   boss:   { hull: "#b46ae8", trim: "#5a2e8f", glow: "#ff54d2", cockpit: "#f6d9ff" },
+  cruiser: { hull: "#a8c8f0", trim: "#3a5a9f", glow: "#9fd8ff", cockpit: "#f0f8ff" },
 };
 
-const STYLE_SEED: Record<ShipStyle, number> = { player: 11, pirate: 23, patrol: 37, trader: 53, boss: 71 };
+const STYLE_SEED: Record<ShipStyle, number> = { player: 11, pirate: 23, patrol: 37, trader: 53, boss: 71, cruiser: 97 };
 
 /** Class silhouettes in a 128-unit space, nose at −y; for "player" the variant is the HULLS index. */
 function shipBody(style: ShipStyle, variant = 0): Path2D {
   if (style === "player") return playerBody(variant);
+  if (style === "cruiser") return playerBody(3); // «Варта» — силуэт линкора в цветах патруля
   const body = new Path2D();
   if (style === "trader") {
     // bulky hauler: wide cargo body, blunt nose
