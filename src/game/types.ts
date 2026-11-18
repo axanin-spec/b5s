@@ -44,6 +44,9 @@ export interface Ship {
   name: string;
   /** Trader: working capital — money is counted outside pools while in its pocket (Этап 5b). */
   wallet: number;
+  /** Clan hauler (Этап 8): rides the lair ⇄ occupied route, bankrolled by the clan
+   *  fund; pirates treat it as kin, civilian caravans' radio ignores it. */
+  smuggler: boolean;
   /** Trader: arbitrage cargo, good id → units (capacity TRADER_AI.HOLD). */
   cargo: Record<string, number>;
   /** Escort contract this ship is protecting (contract id, -1 = none). */

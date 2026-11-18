@@ -268,6 +268,18 @@ export const TRADER_AI = {
 } as const;
 
 /* ------------------------------------------------------------------ */
+/* Clan haulers (Этап 8): серый трафик «база ⇄ оккупированная система» */
+/* ------------------------------------------------------------------ */
+
+export const SMUGGLER = {
+  /** Haulers kept on route while the player is in Terminus or the occupied system. */
+  COUNT: 2,
+  /** Working capital drawn from the CLAN fund at spawn (returned on despawn). */
+  CASH: [5000, 9000] as const,
+  CALLSIGNS: ["Крыса", "Тень", "Мул", "Кобра", "Глухарь"] as const,
+} as const;
+
+/* ------------------------------------------------------------------ */
 /* Reputation                                                          */
 /* ------------------------------------------------------------------ */
 

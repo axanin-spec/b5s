@@ -7,7 +7,7 @@
 
 import {
   BOLT_CFG, CONTRACTS, CONVOY, ECONOMY, EMERGENCY_PULSE, EQUIP, EQUIP_LINES, EQUIP_SELL, FACTION_CFG, GATE_CFG, GOODS, HULLS, HULL_SELL, OCCUPATION, PIRATE_BRANCH, PIRATE_ECON, PLAYER_CFG, POPULATION, QUALITY, RANKS, RAID,
-  MONEY_TOTAL, POOLS, REPAIR_COST_PER_HP, REP, SAVE_VERSION, AUTOSAVE_INTERVAL, STARTER_KIT, SYSTEMS, TRADER_AI,
+  MONEY_TOTAL, POOLS, REPAIR_COST_PER_HP, REP, SAVE_VERSION, AUTOSAVE_INTERVAL, SMUGGLER, STARTER_KIT, SYSTEMS, TRADER_AI,
   VICTORY_SHARE, WORLD_CFG,
 } from "./config";
 import type { EquipCat, EquipItem, HullDef, HullId, YardTier } from "./config";
@@ -44,7 +44,7 @@ function blankShip(): Ship {
     accel: 0, maxSpeed: 0, radius: 20,
     dmg: 0, fireRate: 0, fireCooldown: 0, sinceHit: 99,
     ai: AiState.Wander, targetIdx: -1, tx: 0, ty: 0, wanderT: 0,
-    routeFrom: 0, routeTo: 0, name: "", wallet: 0, cargo: {},
+    routeFrom: 0, routeTo: 0, name: "", wallet: 0, smuggler: false, cargo: {},
     escortId: -1, raidId: -1, raidGuard: false, thinkT: 0, thinkDt: 0.42, trailT: 0, regroupT: 0, regroupUsed: false, sprite: null,
   };
 }
@@ -522,7 +522,8 @@ export class Game {
   private freeShip(i: number): void {
     const s = this.ships[i];
     if (s.active && s.faction === "trader" && s.wallet > 0) {
-      this.pools.alliance += s.wallet; // the fleet's working capital returns to the fund
+      // each fleet's working capital returns to ITS fund: Alliance for caravans, clans for haulers (Этап 8)
+      this.pools[s.smuggler ? "clan" : "alliance"] += s.wallet;
       s.wallet = 0;
     }
     s.active = false;
@@ -642,7 +643,8 @@ export class Game {
         }
       }
     }
-    this.pickTraderRoute(idx);
+    // a hauler's route is fixed (lair ⇄ occupied); thinkSmuggler sends it to the gate (Этап 8)
+    if (!s.smuggler) this.pickTraderRoute(idx);
   }
 
   /** Closest caravan on the radio band, -1 = none in range (Этап 5b). */
@@ -653,6 +655,7 @@ export class Game {
     for (let i = 1; i < MAX_SHIPS; i++) {
       const s = this.ships[i];
       if (!s.active || s.faction !== "trader") continue;
+      if (s.smuggler) continue; // clan haulers don't hail the Alliance band (Этап 8)
       const dd = Math.hypot(s.x - p.x, s.y - p.y) - s.radius;
       if (dd <= bestD) { bestD = dd; best = i; }
     }
@@ -748,6 +751,59 @@ export class Game {
         return;
       }
     }
+  }
+
+  /* ================================================================== */
+  /* Clan haulers (Этап 8): grey traffic lair ⇄ occupied system          */
+  /* ================================================================== */
+
+  /** True while the smuggling route has an endpoint in the player's system:
+   *  the lair in Terminus, or any black-market dock of the occupied system. */
+  private smuggleHere(): boolean {
+    return this.systemDef.id === PIRATE_BRANCH.LAIR_SYSTEM || this.hereOccupied();
+  }
+
+  /**
+   * Clan hauler spawn (Этап 8). A trader hull with the capital rerouted: the spawn
+   * drew Alliance money by default — refund it and draw the stake from the clan fund.
+   */
+  private spawnSmuggler(): void {
+    const p = this.ships[0];
+    const HALF = WORLD_CFG.HALF;
+    const a = this.rnd() * Math.PI * 2;
+    const r = HALF * (0.75 + this.rnd() * 0.35);
+    const x = Math.cos(a) * r, y = Math.sin(a) * r;
+    if (Math.hypot(x - p.x, y - p.y) <= 3800) return; // don't surface a hauler on the player's nose
+    const idx = this.spawnShip("trader", x, y);
+    if (idx < 0) return;
+    const s = this.ships[idx];
+    this.pools.alliance += s.wallet;
+    s.wallet = Math.min(
+      Math.round(SMUGGLER.CASH[0] + this.rnd() * (SMUGGLER.CASH[1] - SMUGGLER.CASH[0])),
+      Math.max(0, Math.round(this.pools.clan)),
+    );
+    this.pools.clan -= s.wallet;
+    s.smuggler = true;
+    s.name = SMUGGLER.CALLSIGNS[Math.floor(this.rnd() * SMUGGLER.CALLSIGNS.length)];
+    this.pickSmugglerRoute(idx);
+  }
+
+  /** One leg of the grey route: the lair in Terminus, a black-market dock in occupied space. */
+  private pickSmugglerRoute(idx: number): void {
+    const s = this.ships[idx];
+    let best = -1;
+    if (this.systemDef.id === PIRATE_BRANCH.LAIR_SYSTEM) {
+      best = this.dockables.findIndex((d) => d.id === PIRATE_BRANCH.LAIR.id);
+    } else {
+      const docks: number[] = [];
+      for (let j = 0; j < this.dockables.length; j++) if (this.dockables[j].isStation) docks.push(j);
+      best = docks.length ? docks[Math.floor(this.rnd() * docks.length)] : -1;
+    }
+    if (best < 0) { this.freeShip(idx); return; } // no endpoint here — fold the run
+    s.routeTo = best;
+    s.ai = AiState.Route;
+    const d = this.dockables[best];
+    s.tx = d.x; s.ty = d.y;
   }
 
   /**
@@ -887,7 +943,8 @@ export class Game {
         this.spawnPickup("cargo", g.id, q, s.x + (this.rnd() - 0.5) * 160, s.y + (this.rnd() - 0.5) * 160);
       }
       s.cargo = {};
-      if (s.wallet > 0) this.spawnPickup("credits", "", Math.round(s.wallet), s.x, s.y, "alliance");
+      // the spilled stake pays out of the fund that bankrolled it (clan for haulers, Этап 8)
+      if (s.wallet > 0) this.spawnPickup("credits", "", Math.round(s.wallet), s.x, s.y, s.smuggler ? "clan" : "alliance");
     } else if (s.faction === "pirate" && this.rnd() < 0.4) {
       this.spawnPickup("cargo", GOODS[Math.floor(this.rnd() * GOODS.length)].id,
         2 + Math.floor(this.rnd() * 6), s.x + (this.rnd() - 0.5) * 160, s.y + (this.rnd() - 0.5) * 160);
@@ -921,7 +978,10 @@ export class Game {
             this.audio.sfx("pickup");
           }
         }
-      } else if (s.faction === "trader") this.addRep(REP.KILL.trader);
+      } else if (s.faction === "trader") {
+        // a clan hauler is kin: the clans remember, the law quietly approves (Этап 8)
+        this.addRep(s.smuggler ? { patrol: 2, clan: -6 } : REP.KILL.trader);
+      }
       else if (s.faction === "patrol") this.addRep(REP.KILL.patrol);
     }
     // scripted-event bookkeeping runs regardless of who pulled the trigger
@@ -1321,9 +1381,13 @@ export class Game {
         systemId: this.occ.systemId, held: this.occ.held,
         t: Math.round(this.occ.t), flagshipBuilt: this.occ.flagshipBuilt,
       },
-      // traders respawn on continue and re-draw their capital, so the saved Alliance
-      // must already include their wallets (gross pools — Этап 5b)
-      pools: { ...this.pools, alliance: this.pools.alliance + this.traderFloat() },
+      // traders respawn on continue and re-draw their capital, so the saved pools must
+      // already include their wallets (gross pools — Этап 5b; clan haulers gross into clan, Этап 8)
+      pools: {
+        ...this.pools,
+        alliance: this.pools.alliance + this.traderFloat(),
+        clan: this.pools.clan + this.smugglerFloat(),
+      },
       raid: this.raid ? {
         targetId: this.raid.targetId, timeLeft: Math.round(this.raid.timeLeft),
         cooldown: Math.round(this.raid.cooldown), grabbed: [...this.raid.grabbed],
@@ -1368,17 +1432,25 @@ export class Game {
   /**
    * Credits sitting in traders' wallets (Этап 5b). This is Alliance money on loan:
    * drawn from pools.alliance at spawn, returned at freeShip, pocketed by the player on a kill.
+   * Clan haulers (Этап 8) are excluded — their stake is clan money, see smugglerFloat().
    */
   private traderFloat(): number {
     let f = 0;
-    for (const s of this.ships) if (s.active && s.faction === "trader") f += Math.round(s.wallet);
+    for (const s of this.ships) if (s.active && s.faction === "trader" && !s.smuggler) f += Math.round(s.wallet);
+    return f;
+  }
+
+  /** Clan hauler wallets in flight (Этап 8): clan money on loan, returned at freeShip. */
+  private smugglerFloat(): number {
+    let f = 0;
+    for (const s of this.ships) if (s.active && s.faction === "trader" && s.smuggler) f += Math.round(s.wallet);
     return f;
   }
 
   /** Debug/QA: the closed-circulation invariant. delta must stay 0 — see the balance autotest. */
   econAudit(): { total: number; player: number; pools: MoneyPools; traderFloat: number; delta: number } {
     const sum = this.pools.patrol + this.pools.alliance + this.pools.clan + this.pools.stations;
-    const float = this.traderFloat();
+    const float = this.traderFloat() + this.smugglerFloat();
     const player = Math.round(this.player.credits);
     return { total: MONEY_TOTAL, player, pools: { ...this.pools }, traderFloat: float, delta: sum + float + player - MONEY_TOTAL };
   }
@@ -1786,7 +1858,8 @@ export class Game {
   }
 
   /** Radar/blip color; pirate status swaps the palette — raiders go blue, patrol red. */
-  private blipColor(f: Faction): string {
+  private blipColor(f: Faction, smuggler = false): string {
+    if (smuggler) return "#b46aff"; // clan hauler — violet, like the clan rep chip (Этап 8)
     const ally = this.isPirate();
     if (f === "pirate") return ally ? "#5a9fff" : "#ff5a4a";
     if (f === "patrol") return ally ? "#ff5a4a" : "#5a9fff";
@@ -2657,6 +2730,12 @@ export class Game {
     const patrolCap = POPULATION.PATROLS + (this.systemDef.patrolBoost ?? 0);
     if (!this.hereOccupied() && patrols < patrolCap) this.spawnAtEdge("patrol");
     if (traders < POPULATION.TRADERS) this.spawnAtEdge("trader");
+    // clan haulers (Этап 8): the grey route breathes only around its endpoints
+    if (this.smuggleHere()) {
+      let smugglers = 0;
+      for (const s of this.ships) if (s.active && s.smuggler) smugglers++;
+      if (smugglers < SMUGGLER.COUNT) this.spawnSmuggler();
+    }
   }
 
   /* ================================================================== */
@@ -2701,7 +2780,9 @@ export class Game {
 
       // keep NPCs inside the world; fleeing pirates may leave (despawn)
       if (Math.abs(s.x) > HALF * 1.25 || Math.abs(s.y) > HALF * 1.25) {
-        // only a pirate running for good leaves the system; a regrouping one stays clamped inside
+        // a pirate running for good leaves the system; a regrouping one stays clamped inside.
+        // A clan hauler past the edge is through the gate — the run continues off-screen (Этап 8)
+        if (s.smuggler) { this.freeShip(i); continue; }
         if (s.faction === "pirate" && s.ai === AiState.Flee && s.regroupT <= 0) { this.freeShip(i); continue; }
         s.x = Math.max(-HALF, Math.min(HALF, s.x));
         s.y = Math.max(-HALF, Math.min(HALF, s.y));
@@ -2785,6 +2866,28 @@ export class Game {
     const HALF = WORLD_CFG.HALF;
 
     if (s.faction === "trader") {
+      // clan hauler (Этап 8): one endpoint, one trade, then run for the gate.
+      // Flee doubles as "leaving the system" — the edge check in updateAi despawns it.
+      if (s.smuggler) {
+        if (s.ai === AiState.Flee) return;
+        const d = this.dockables[s.routeTo];
+        if (!d) {
+          s.ai = AiState.Flee;
+          const a = Math.atan2(s.y, s.x);
+          s.tx = Math.cos(a) * HALF * 1.4;
+          s.ty = Math.sin(a) * HALF * 1.4;
+          return;
+        }
+        s.tx = d.x; s.ty = d.y;
+        if (Math.hypot(d.x - s.x, d.y - s.y) < d.radius + 260) {
+          this.traderTrade(i); // settles with the clan till (lair / occupied system)
+          s.ai = AiState.Flee;
+          const a = Math.atan2(s.y, s.x) + (this.rnd() - 0.5);
+          s.tx = Math.cos(a) * HALF * 1.4;
+          s.ty = Math.sin(a) * HALF * 1.4;
+        }
+        return;
+      }
       if (s.ai === AiState.Flee) {
         let bestD = Infinity;
         for (const d of this.dockables) {
@@ -2901,6 +3004,7 @@ export class Game {
     for (let j = 1; j < MAX_SHIPS; j++) {
       const o = this.ships[j];
       if (!o.active || (o.faction !== "trader" && o.faction !== "patrol")) continue;
+      if (o.smuggler) continue; // kin hauling for the clans (Этап 8) — raiders leave it be
       const d = Math.hypot(o.x - s.x, o.y - s.y);
       const w = o.faction === "trader" ? 0.8 : 0.55; // prefer fat traders, wary of patrols
       if (d * w < bestD) { best = j; bestD = d * w; }
@@ -2948,6 +3052,7 @@ export class Game {
       for (let i = 0; i < MAX_SHIPS; i++) {
         const s = this.ships[i];
         if (!s.active) continue;
+        if (s.smuggler && (b.from === "pirate" || b.from === "boss")) continue; // kin hauler — clan guns hold
         if (!canHit(b.from, s.faction, outlaw, pact)) continue;
         const rr = s.radius + BOLT_CFG.RADIUS;
         if (Math.abs(s.x - b.x) > rr || Math.abs(s.y - b.y) > rr) continue;
@@ -3631,7 +3736,7 @@ export class Game {
     for (let i = 1; i < MAX_SHIPS; i++) {
       const s = this.ships[i];
       if (!s.active) continue;
-      map.ships.push({ x: s.x / HALF, y: s.y / HALF, c: this.blipColor(s.faction) });
+      map.ships.push({ x: s.x / HALF, y: s.y / HALF, c: this.blipColor(s.faction, s.smuggler) });
     }
     const p = this.ships[0];
     map.player = { x: p.x / HALF, y: p.y / HALF, a: p.angle };
@@ -3885,6 +3990,18 @@ export class Game {
         return this.player.credits;
       },
       stations: () => this.dockables.filter((d) => d.isStation).map((d) => ({ id: d.id, kind: d.kind, name: d.name })),
+      // клановые бортники (Этап 8): маршрут/ИИ/кошелёк + не целится ли в них пират
+      smugglers: () => this.ships
+        .map((s, i) => ({ s, i }))
+        .filter(({ s, i }) => i > 0 && s.active && s.smuggler)
+        .map(({ s, i }) => ({
+          i, ai: s.ai, name: s.name,
+          routeId: this.dockables[s.routeTo]?.id ?? null,
+          wallet: Math.round(s.wallet), hp: s.hp, maxHp: s.maxHp,
+          x: Math.round(s.x), y: Math.round(s.y),
+          targetedByPirate: this.ships.some((o, j) => j > 0 && o.active
+            && (o.faction === "pirate" || o.faction === "boss") && o.targetIdx === i),
+        })),
       dockAt: (id: string) => {
         const d = this.dockables.find((x) => x.isStation && (x.id === id || x.kind === id));
         if (!d) return false;
@@ -3930,7 +4047,7 @@ export class Game {
       const s = this.ships[i];
       if (!s.active) continue;
       if (i === 0) { out.push({ x: s.x / HALF, y: s.y / HALF, c: "#ffffff", s: 4 }); continue; }
-      out.push({ x: s.x / HALF, y: s.y / HALF, c: this.blipColor(s.faction), s: s.faction === "boss" ? 4 : 2 });
+      out.push({ x: s.x / HALF, y: s.y / HALF, c: this.blipColor(s.faction, s.smuggler), s: s.faction === "boss" ? 4 : 2 });
     }
     // plotted course ring under the objective marker
     if (this.waypoint) out.push({ x: this.waypoint.x / HALF, y: this.waypoint.y / HALF, c: "#54ffd2", s: 7, w: 1 });
