@@ -558,6 +558,9 @@ export class Game {
     for (let j = 0; j < n; j++) {
       if (n > 1 && j === s.routeFrom) continue; // we are standing at routeFrom
       const d = this.dockables[j];
+      // civilian caravans don't know the way to the smuggler lair — and its
+      // deflated black-market prices would otherwise vacuum the whole fleet in
+      if (d.id === PIRATE_BRANCH.LAIR.id) continue;
       let v: number;
       if (loaded) {
         v = 0;
@@ -593,7 +596,8 @@ export class Game {
     const s = this.ships[idx];
     const here = this.dockables[s.routeTo];
     if (!here) return;
-    const pool: PoolId = this.hereOccupied() ? "clan" : "stations";
+    // lair dockings (legacy routes) also settle with the clan till, like player trades do
+    const pool: PoolId = this.hereOccupied() || here.id === PIRATE_BRANCH.LAIR.id ? "clan" : "stations";
 
     // 1) sell everything the market can still pay for
     for (const g of GOODS) {
@@ -1845,7 +1849,8 @@ export class Game {
     // licensed brokers don't work in pirate space — there the clans post their own board (6b),
     // and the lair keeps its own board too (6c)
     if (this.hereOccupied() || here.id === PIRATE_BRANCH.LAIR.id) { this.genClanOffers(here); return; }
-    const others = this.dockables.filter((d) => d.id !== here.id);
+    // licensed brokers never route cargo to the smuggler lair — officially it doesn't exist
+    const others = this.dockables.filter((d) => d.id !== here.id && d.id !== PIRATE_BRANCH.LAIR.id);
     if (others.length === 0) return;
     const jit = (base: number) => Math.round((base * (1 + (this.rnd() * 2 - 1) * CONTRACTS.JITTER)) / 50) * 50;
     const boost = 1 + this.systemDef.pirateBoost * 0.2;
