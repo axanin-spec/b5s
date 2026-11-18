@@ -239,6 +239,10 @@ export const ECONOMY = {
   EVENT_CHANCE: 0.35,
   EVENT_MULT: 1.9,
   EVENT_DURATION: 55,
+  /** Per-tick pull of each market's fluct toward its system anchor (priceLevel).
+   *  Half-life ≈ 23 ticks (~7 min): caravans, raids and luck bend prices,
+   *  but a system's wealth profile always reasserts itself. */
+  ANCHOR_PULL: 0.03,
 } as const;
 
 /* ------------------------------------------------------------------ */

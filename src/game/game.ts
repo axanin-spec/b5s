@@ -45,7 +45,7 @@ function blankShip(): Ship {
     dmg: 0, fireRate: 0, fireCooldown: 0, sinceHit: 99,
     ai: AiState.Wander, targetIdx: -1, tx: 0, ty: 0, wanderT: 0,
     routeFrom: 0, routeTo: 0, name: "", wallet: 0, cargo: {},
-    escortId: -1, raidId: -1, raidGuard: false, thinkT: 0, trailT: 0, regroupT: 0, regroupUsed: false, sprite: null,
+    escortId: -1, raidId: -1, raidGuard: false, thinkT: 0, thinkDt: 0.42, trailT: 0, regroupT: 0, regroupUsed: false, sprite: null,
   };
 }
 
@@ -2665,11 +2665,14 @@ export class Game {
       if (s.sinceHit > 4 && s.shield < s.maxShield) s.shield = Math.min(s.maxShield, s.shield + 8 * dt);
       s.fireCooldown -= dt;
 
-      /* think (staggered) */
+      /* think (staggered); think() receives the real elapsed time, so behaviour
+         timings survive changes to the think cadence */
       s.thinkT -= dt;
       if (s.thinkT <= 0) {
-        s.thinkT = 0.3 + this.rnd() * 0.25;
-        this.think(i);
+        const elapsed = s.thinkDt - s.thinkT; // previous interval + overshoot
+        s.thinkDt = 0.3 + this.rnd() * 0.25;
+        s.thinkT = s.thinkDt;
+        this.think(i, elapsed);
       }
 
       /* steer toward waypoint */
@@ -2767,7 +2770,7 @@ export class Game {
     }
   }
 
-  private think(i: number): void {
+  private think(i: number, dt: number): void {
     const s = this.ships[i];
     const p = this.ships[0];
     const HALF = WORLD_CFG.HALF;
@@ -2822,7 +2825,7 @@ export class Game {
       } else {
         s.targetIdx = -1;
         s.ai = AiState.Wander;
-        s.wanderT -= 0.4;
+        s.wanderT -= dt;
         if (s.wanderT <= 0 || Math.hypot(s.tx - s.x, s.ty - s.y) < 300) {
           s.wanderT = 6 + this.rnd() * 5;
           const d = this.dockables[Math.floor(this.rnd() * this.dockables.length)];
@@ -2859,7 +2862,7 @@ export class Game {
     // tactical disengagement (AI polish): a wounded raider with broken shields peels off,
     // loiters off-range until its shields knit back (or 7 s pass), then dives into the fight again
     if (s.regroupT > 0) {
-      s.regroupT -= 0.45; // one think tick worth of time
+      s.regroupT -= dt; // real elapsed think time — was a hardcoded per-tick step
       if (s.regroupT <= 0 || s.shield > s.maxShield * 0.5) {
         s.regroupT = 0; s.ai = AiState.Wander; // back in — target selection below re-chases
       }
@@ -2909,7 +2912,7 @@ export class Game {
     } else {
       s.targetIdx = -1;
       s.ai = AiState.Wander;
-      s.wanderT -= 0.4;
+      s.wanderT -= dt;
       if (s.wanderT <= 0 || Math.hypot(s.tx - s.x, s.ty - s.y) < 400) {
         s.wanderT = 5 + this.rnd() * 6;
         s.tx = (this.rnd() - 0.5) * 2 * HALF * 0.85;

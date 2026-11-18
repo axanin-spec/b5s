@@ -54,6 +54,8 @@ export interface Ship {
   raidGuard: boolean;
   /** Escort/flee bookkeeping. */
   thinkT: number;
+  /** Scheduled interval of the current think cycle — think() receives the real elapsed time. */
+  thinkDt: number;
   trailT: number;
   /** Pirate disengagement timer (AI polish): >0 = pulled out of the fight to let shields regen. */
   regroupT: number;
@@ -121,6 +123,9 @@ export interface Dockable {
   market: Record<string, number>;
   /** Random-walk multiplier per good id. */
   fluct: Record<string, number>;
+  /** Mean-reversion anchor for fluct: the system's priceLevel — keeps rich/poor
+   *  systems distinct instead of letting the random walk wash the premium out. */
+  anchor: number;
   /** Active demand event: good id + remaining seconds, null = none. */
   eventGood: string | null;
   eventT: number;

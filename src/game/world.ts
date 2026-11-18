@@ -48,6 +48,7 @@ export function generateWorld(seed: number, priceLevel = 1, sysMods: Record<stri
       sysMods,
       market: {},
       fluct: initFluct(),
+      anchor: priceLevel,
       eventGood: null,
       eventT: 0,
     });
@@ -68,6 +69,7 @@ export function generateWorld(seed: number, priceLevel = 1, sysMods: Record<stri
       sysMods,
       market: {},
       fluct: initFluct(),
+      anchor: priceLevel,
       eventGood: null,
       eventT: 0,
     });
@@ -88,6 +90,7 @@ export function generateWorld(seed: number, priceLevel = 1, sysMods: Record<stri
       sysMods,
       market: {},
       fluct: initFluct(),
+      anchor: priceLevel,
       eventGood: null,
       eventT: 0,
     });
@@ -136,7 +139,10 @@ export function economyTick(dockables: Dockable[], rnd: () => number): string | 
   for (const d of dockables) {
     for (const g of GOODS) {
       const step = (rnd() - 0.5) * 2 * ECONOMY.FLUCT_STEP;
-      d.fluct[g.id] = Math.min(ECONOMY.FLUCT_MAX, Math.max(ECONOMY.FLUCT_MIN, d.fluct[g.id] + step));
+      // mean reversion: the random walk wanders, but the system's wealth profile
+      // (priceLevel anchor) keeps pulling its markets back — rich stays rich
+      const pull = (d.anchor - d.fluct[g.id]) * ECONOMY.ANCHOR_PULL;
+      d.fluct[g.id] = Math.min(ECONOMY.FLUCT_MAX, Math.max(ECONOMY.FLUCT_MIN, d.fluct[g.id] + step + pull));
     }
     if (d.eventGood) {
       d.eventT -= ECONOMY.TICK;
