@@ -30,7 +30,7 @@ import { loadImage, loadPlanetTexture } from "./assets";
 import { economyTick, findDockTarget, generateWorld, goodName, kindName, priceOf, refreshAllPrices, updateOrbits } from "./world";
 import { loadSave, writeSave, importSaveJson } from "./save";
 import { gameApi, uiBridge, type EndStats, type GameApi, type HudData, type MapSnapshot, type RadioSnapshot, type StationSnapshot } from "./uiBridge";
-import type { ActiveContract, Bolt, ContractOffer, Dockable, Faction, InstalledGear, MoneyPools, OccupationState, Pickup, PlayerState, PoolId, RaidOp, SaveGame, Ship } from "./types";
+import type { ActiveContract, Bolt, ContractOffer, Dockable, Faction, InstalledGear, MarketIntelEntry, MoneyPools, OccupationState, Pickup, PlayerState, PoolId, RaidOp, SaveGame, Ship } from "./types";
 import { AiState } from "./types";
 
 const MAX_SHIPS = 40;
@@ -216,6 +216,11 @@ export class Game {
   private layoutCache = new Map<string, Dockable[]>();
   /** Closed money circulation (Этап 5a): Σ pools + player.credits === MONEY_TOTAL at all times. */
   pools: MoneyPools = { ...POOLS }; // public: казны — ядро economy.ts
+  /**
+   * Рыночная разведка (Этап 10a): последние виденные при стыковке цены станций,
+   * ключ — id дока; перезаписывается при каждом доке. Кормит сводку «Рынки» на карте.
+   */
+  marketIntel: Record<string, MarketIntelEntry> = {};
 
   private static freshPlayerState(): PlayerState {
     return {
@@ -1197,6 +1202,7 @@ export class Game {
     this.pirateStatus = false; // 5f: a fresh name is clean paper
     this.occ = { systemId: OCCUPATION.START_SYSTEM, held: true, t: OCCUPATION.FLAGSHIP_BUILD, flagshipBuilt: false };
     this.pools = { ...POOLS };
+    this.marketIntel = {}; // 10a: a fresh captain has no market history
     this.waypoint = null;
     this.raid = null;
     this.grabTarget = null; this.grabT = 0;
@@ -1245,6 +1251,8 @@ export class Game {
       t: save.occupation.t, flagshipBuilt: save.occupation.flagshipBuilt,
     };
     this.pools = save.pools ? { ...save.pools } : { ...POOLS };
+    // 10a: the intel log survives the reload; validateSave already backfilled a v8 save with {}
+    this.marketIntel = save.intel ? { ...save.intel } : {};
     this.waypoint = null;
     // the ops desk keeps the raid across a reload (guards re-form on arrival, see spawnInitialPopulation)
     this.raid = save.raid
@@ -1312,6 +1320,8 @@ export class Game {
         funder: this.contract.funder,
       } : null,
       fluct,
+      // 10a: market intel goes with the save — serialized as-is, entries are replaced whole
+      intel: this.marketIntel,
       stats: {
         kills: this.player.kills, earned: Math.round(this.player.earned),
         traded: Math.round(this.player.traded), playTime: Math.round(this.player.playTime),
@@ -1468,6 +1478,8 @@ export class Game {
     this.sm.transition("docked");
     this.audio.sfx("dock");
     this.audio.setThreat(0);
+    // 10a: the terminal screen is the observation — log it before the autosave picks it up
+    this.recordIntel(this.dockTarget);
     this.saveNow(); // docking autosaves
     // a courier contract pays out the moment its sealed container is handed over
     if (this.contract && this.contract.kind === "transport" && this.contract.destId === this.dockTarget.id) {
@@ -2687,11 +2699,11 @@ export class Game {
     uiBridge.set({ hud, radio: this.radioData(), feed: this.feedView() });
   }
 
-  pushStation(): void {
-    const d = this.dockTarget;
-    if (!d) return;
-    const p = this.ships[0];
-    const occupied = this.hereOccupied();
+  /**
+   * Terminal prices right now: dock base × reputation/black-market modifiers.
+   * Shared by the terminal screen and the intel log (Этап 10a) — both must agree.
+   */
+  private stationPrices(d: Dockable): StationSnapshot["prices"] {
     // black market skews both directions: smugglers' goods cheap, stolen cargo paid fat
     const mod = this.priceMods();
     const prices: StationSnapshot["prices"] = {};
@@ -2702,6 +2714,29 @@ export class Game {
         sell: Math.max(1, Math.round(base * ECONOMY.SELL_FACTOR * mod.sell)),
       };
     }
+    return prices;
+  }
+
+  /**
+   * Рыночная разведка (Этап 10a): снимок цен посещённой станции. Перезаписывает
+   * прежнее наблюдение; на карте оно стареет вместе с дрейфом цен (world.economyTick).
+   */
+  private recordIntel(d: Dockable): void {
+    this.marketIntel[d.id] = {
+      systemId: this.systemDef.id,
+      name: d.name,
+      t: Math.round(this.player.playTime),
+      prices: this.stationPrices(d),
+    };
+  }
+
+  pushStation(): void {
+    const d = this.dockTarget;
+    if (!d) return;
+    const p = this.ships[0];
+    const occupied = this.hereOccupied();
+    const mod = this.priceMods(); // priceNote below still reads the reputation bracket
+    const prices = this.stationPrices(d);
     const station: StationSnapshot = {
       id: d.id,
       name: d.name,
@@ -2806,6 +2841,11 @@ export class Game {
         systemId: this.occ.systemId, held: this.occ.held,
         flagshipBuilt: this.occ.flagshipBuilt, timer: Math.max(0, Math.round(this.occ.t)),
       },
+      // 10a: visited stations only — the chart marks the rest «нет данных» itself
+      intel: Object.entries(this.marketIntel).map(([dockableId, e]) => ({
+        dockableId, name: e.name, systemId: e.systemId, t: e.t, prices: e.prices,
+      })),
+      now: Math.round(this.player.playTime),
     };
     for (let i = 1; i < MAX_SHIPS; i++) {
       const s = this.ships[i];

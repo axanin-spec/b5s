@@ -65,6 +65,16 @@ export interface MapSnapshot {
   waypoint: { x: number; y: number; label: string } | null;
   /** Occupation phase for the info panel. */
   occ: { systemId: string; held: boolean; flagshipBuilt: boolean; timer: number } | null;
+  /**
+   * Market intel (Этап 10a): last prices seen while docking, one entry per visited
+   * station. Stations the player never docked at are absent — the chart shows «нет данных».
+   */
+  intel: {
+    dockableId: string; name: string; systemId: string; t: number;
+    prices: Record<string, { buy: number; sell: number }>;
+  }[];
+  /** Game time (playTime seconds) when this snapshot was built — reference for intel age. */
+  now: number;
 }
 
 export interface StationSnapshot {

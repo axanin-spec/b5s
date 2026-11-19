@@ -264,6 +264,18 @@ export interface RaidOp {
 /* Save game                                                           */
 /* ------------------------------------------------------------------ */
 
+/** One station's market observation (Этап 10a): prices seen at docking time. */
+export interface MarketIntelEntry {
+  /** Star system the station belongs to. */
+  systemId: string;
+  /** Station name as seen at observation time. */
+  name: string;
+  /** Game time of the observation, player.playTime seconds. */
+  t: number;
+  /** Terminal prices (buy/sell per good id) — same shape as StationSnapshot.prices. */
+  prices: Record<string, { buy: number; sell: number }>;
+}
+
 export interface SaveGame {
   v: number;
   seed: number;
@@ -295,6 +307,11 @@ export interface SaveGame {
   } | null;
   /** Price fluctuation multipliers per dockable id. */
   fluct: Record<string, Record<string, number>>;
+  /**
+   * v9 (Этап 10a): рыночная разведка — последние виденные при стыковке цены каждой
+   * посещённой станции, ключ — id дока. v8-сейвы поля не имеют: валидатор подставляет {}.
+   */
+  intel?: Record<string, MarketIntelEntry>;
   stats: { kills: number; earned: number; traded: number; playTime: number };
   /** The dynamic pirate front — see OccupationState. */
   occupation: { systemId: string; held: boolean; t: number; flagshipBuilt: boolean };

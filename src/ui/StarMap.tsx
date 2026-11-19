@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { GOODS } from '@/game/config'
 import { gameApi, type MapSnapshot } from '@/game/uiBridge'
 
 /** Fixed galaxy positions for the six chart nodes (canvas fractions), hexagonal ring. */
@@ -18,6 +19,15 @@ function mmss(sec: number): string {
 
 function priceLabel(level: number): string {
   return level < 0.95 ? 'дешёвая — закупаться' : level > 1.05 ? 'дорогая — продавать' : 'рыночные цены'
+}
+
+/** Age of a market observation vs snapshot time; stale after 10 game minutes. */
+function intelAge(map: MapSnapshot, t: number): { text: string; stale: boolean } {
+  const d = Math.max(0, map.now - t)
+  if (d < 60) return { text: 'только что', stale: false }
+  const stale = d > 600
+  if (d < 3600) return { text: `${Math.floor(d / 60)} мин назад`, stale }
+  return { text: `${Math.floor(d / 3600)} ч назад`, stale: true }
 }
 
 function statusLine(map: MapSnapshot, id: string): { text: string; cls: string } {
@@ -42,6 +52,8 @@ export function StarMap({ map }: { map: MapSnapshot }) {
   const [viewId, setViewId] = useState<string>(map.currentId)
   const [selId, setSelId] = useState<string>(map.currentId)
   const [hint, setHint] = useState<string | null>(null)
+  /** Этап 10a: «Рынки» on the system tab — collapsed until asked for. */
+  const [mkOpen, setMkOpen] = useState(false)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const mapRef = useRef(map)
   mapRef.current = map
@@ -272,6 +284,62 @@ export function StarMap({ map }: { map: MapSnapshot }) {
           ))}
         </div>
       )}
+
+      {/* Этап 10a: разведка рынков показанной системы — что видели при стыковке */}
+      {tab === 'system' && (() => {
+        const lay = map.layouts.find((l) => l.id === viewId)
+        if (!lay) return null
+        const intel = new Map(map.intel.filter((i) => i.systemId === viewId).map((i) => [i.dockableId, i]))
+        const seen = lay.bodies.filter((b) => intel.has(b.id)).length
+        return (
+          <div className="sm-markets">
+            <button className="sm-mk-head" onClick={() => setMkOpen((v) => !v)}>
+              {mkOpen ? '▾' : '▸'} Рынки
+              <span className="sm-mk-count">{seen}/{lay.bodies.length} разведано</span>
+            </button>
+            {mkOpen && (
+              <table className="sm-mk-table">
+                <thead>
+                  <tr>
+                    <th className="sm-mk-th-name">Станция</th>
+                    {GOODS.map((g) => <th key={g.id}>{g.name}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {lay.bodies.map((b) => {
+                    const it = intel.get(b.id)
+                    if (!it) {
+                      return (
+                        <tr key={b.id} className="sm-mk-none">
+                          <td className="sm-mk-name">{b.label}</td>
+                          <td colSpan={GOODS.length}>нет данных — стыкуйтесь</td>
+                        </tr>
+                      )
+                    }
+                    const age = intelAge(map, it.t)
+                    return (
+                      <tr key={b.id} className={age.stale ? 'stale' : undefined}>
+                        <td className="sm-mk-name">
+                          {it.name}
+                          <span className="sm-mk-age">{age.text}{age.stale ? ' · устарело' : ''}</span>
+                        </td>
+                        {GOODS.map((g) => {
+                          const q = it.prices[g.id]
+                          return (
+                            <td key={g.id} className="sm-mk-cell">
+                              {q ? <><span className="b">{q.buy}</span><span className="s">{q.sell}</span></> : '—'}
+                            </td>
+                          )
+                        })}
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )
+      })()}
 
       <div className={`sm-info ${tab === 'system' ? 'hidden' : ''}`} hidden={tab !== 'galaxy'}>
         <div className="sm-name">

@@ -22,7 +22,9 @@
     "prewatch": "npm run build:test",
     "watch": "node scripts/watch-test.mjs",
     "prefocus": "npm run build:test",
-    "focus": "node scripts/focus-test.mjs"
+    "focus": "node scripts/focus-test.mjs",
+    "preintel": "npm run build:test",
+    "intel": "node scripts/intel-test.mjs"
   },
   "dependencies": {
     "react": "^19.2.0",

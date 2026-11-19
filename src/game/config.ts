@@ -604,8 +604,11 @@ export const MODULE_LOOT = {
 
 export const SAVE_KEY = "savegame";
 // v6: closed money pools (pools + player = MONEY_TOTAL); older saves are rejected
-/** v8: upgrades are gone — hull class + installed modules (Этап 7). Older saves are rejected. */
-export const SAVE_VERSION = 8;
+/**
+ * v9 (Этап 10a): market intel — last-seen dock prices. Unlike v7→v8, v8 saves are
+ * still accepted: they simply load with an empty intel log (save.ts backfills it).
+ */
+export const SAVE_VERSION = 9;
 export const AUTOSAVE_INTERVAL = 30;
 
 /* ------------------------------------------------------------------ */

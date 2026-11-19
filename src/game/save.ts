@@ -55,7 +55,8 @@ export function loadSave(): SaveGame | null {
 export function validateSave(raw: unknown): SaveGame | null {
   if (typeof raw !== "object" || raw === null) return null;
   const s = raw as SaveGame;
-  if (s.v !== SAVE_VERSION) return null;
+  // v9 added the market intel log (Этап 10a); v8 saves stay playable — they load with an empty one
+  if (s.v !== SAVE_VERSION && s.v !== 8) return null;
   if (!isNum(s.seed) || typeof s.system !== "string" || s.system.length === 0) return null;
   if (typeof s.player !== "object" || s.player === null) return null;
   const p = s.player;
@@ -83,6 +84,21 @@ export function validateSave(raw: unknown): SaveGame | null {
   if (typeof s.occupation !== "object" || s.occupation === null) return null;
   if (typeof s.occupation.systemId !== "string" || !isBool(s.occupation.held) || !isNum(s.occupation.t) || !isBool(s.occupation.flagshipBuilt)) return null;
   if (!isNum(s.bossKills) || s.bossKills < 0) return null;
+  // v9: market intel (Этап 10a) — optional; a v8 save has none and gets an empty log below
+  if (s.intel !== undefined && s.intel !== null) {
+    if (typeof s.intel !== "object") return null;
+    for (const k of Object.keys(s.intel)) {
+      const e = s.intel[k];
+      if (typeof e !== "object" || e === null) return null;
+      if (typeof e.systemId !== "string" || typeof e.name !== "string" || !isNum(e.t) || e.t < 0) return null;
+      if (typeof e.prices !== "object" || e.prices === null) return null;
+      for (const g of Object.keys(e.prices)) {
+        const q = e.prices[g];
+        if (typeof q !== "object" || q === null || !isNum(q.buy) || !isNum(q.sell) || q.buy < 0 || q.sell < 0) return null;
+      }
+    }
+  }
+  if (!s.intel) s.intel = {};
   // v6: closed money pools — sane finite numbers; the clan fund may run into debt
   // (Этап 5c hull write-offs) but never below -MONEY_TOTAL
   if (typeof s.pools !== "object" || s.pools === null) return null;
