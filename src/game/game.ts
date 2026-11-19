@@ -15,6 +15,7 @@ import { AudioSystem } from "./audio";
 import * as econ from "./economy";
 import * as fleet from "./fleet";
 import * as missions from "./missions";
+import { renderFrame, paletteTex } from "./render";
 import { GameLoop } from "./engine";
 import { Input } from "./input";
 import { perf } from "./perf";
@@ -71,22 +72,7 @@ export function canHit(from: Faction, target: Faction, outlaw: boolean, piratePa
 }
 
 /* ---------------- particles ---------------- */
-
-/** Fixed palette so the hot loop never builds color strings. */
-const PALETTE = [
-  "#ffffff", "#ffe9a8", "#ffd24a", "#ff9c54", "#ff5a4a", "#ff54d2",
-  "#54ffd2", "#7fd0ff", "#5a9fff", "#d26aff", "#8fd08f", "#c96a4a",
-] as const;
-const PALETTE_TEX: HTMLCanvasElement[] = [];
-
-function paletteTex(): HTMLCanvasElement[] {
-  if (PALETTE_TEX.length) return PALETTE_TEX;
-  for (const hex of PALETTE) {
-    const rgb = `${parseInt(hex.slice(1, 3), 16)},${parseInt(hex.slice(3, 5), 16)},${parseInt(hex.slice(5, 7), 16)}`;
-    PALETTE_TEX.push(makeGlowTexture(rgb));
-  }
-  return PALETTE_TEX;
-}
+/* палитра частиц переехала в render.ts (Этап 9a) — game дёргает paletteTex() для прогрева */
 
 interface Particle {
   life: number; maxLife: number;
@@ -96,9 +82,9 @@ interface Particle {
   size: number;
 }
 
-interface StarDot { x: number; y: number; r: number; c: string }
+export interface StarDot { x: number; y: number; r: number; c: string }
 
-interface ParallaxLayer {
+export interface ParallaxLayer {
   f: number;
   stars: StarDot[];
   nebulas: { tex: CanvasImageSource; x: number; y: number; scale: number; additive?: boolean }[];
@@ -108,67 +94,67 @@ interface ParallaxLayer {
 const FEED_TTL = 12;
 
 export class Game {
-  private ctx: CanvasRenderingContext2D;
+  ctx: CanvasRenderingContext2D; // public: render.ts
   private loop: GameLoop;
-  private input: Input;
+  input: Input; // public: render.ts
   audio = new AudioSystem(); // public: экономика (economy.ts) играет звуки сделок
   sm = new GameStateMachine(); // public: missions.ts проверяет фазу
   private disposed = false;
 
   /* view */
-  private ppu = 1;
-  private camX = 0; private camY = 0;
-  private shake = 0;
-  private titleOrbitT = 0;
-  private layers: ParallaxLayer[] = [];
+  ppu = 1; // public: render.ts
+  camX = 0; camY = 0; // public: render.ts
+  shake = 0; // public: render.ts
+  titleOrbitT = 0; // public: render.ts
+  layers: ParallaxLayer[] = []; // public: render.ts
 
   /* world */
   private seed = 1;
   rnd = mulberry32(1); // public: missions.ts тасует доску контрактов
   dockables: Dockable[] = []; // public: economy.ts торгует с рынков доков
-  private dockTex: HTMLCanvasElement[] = [];
-  private starTex: HTMLCanvasElement;
-  private dockSpin: number[] = [];
+  dockTex: HTMLCanvasElement[] = []; // public: render.ts
+  starTex: HTMLCanvasElement; // public: render.ts
+  dockSpin: number[] = []; // public: render.ts
   /** Per-dockable spin rate; AI planets bake their terminator, so their art swap freezes it to 0. */
-  private dockSpinVel: number[] = [];
+  dockSpinVel: number[] = []; // public: render.ts
   /** Guards async art swaps against a world rebuild (system jump) mid-flight. */
   private worldGen = 0;
 
   /* entities */
   ships: Ship[] = []; // public: economy.ts считает float кошельков
-  private shipTexMap: Record<string, HTMLCanvasElement[]>;
-  private bolts: Bolt[] = [];
-  private boltTexPlayer: HTMLCanvasElement;
-  private boltTexEnemy: HTMLCanvasElement;
-  private pickups: Pickup[] = [];
-  private pickupTex: { cargo: HTMLCanvasElement; credits: HTMLCanvasElement };
-  private particles: Particle[] = [];
+  shipTexMap: Record<string, HTMLCanvasElement[]>; // public: render.ts
+  bolts: Bolt[] = []; // public: render.ts
+  boltTexPlayer: HTMLCanvasElement; // public: render.ts
+  boltTexEnemy: HTMLCanvasElement; // public: render.ts
+  pickups: Pickup[] = []; // public: render.ts
+  pickupTex: { cargo: HTMLCanvasElement; credits: HTMLCanvasElement }; // public: render.ts
+  particles: Particle[] = []; // public: render.ts
   private pCursor = 0;
   /** Expanding shockwave rings spawned by explosions (stroked additively in screen space). */
-  private rings: { life: number; maxLife: number; x: number; y: number; r: number; vr: number; hot: boolean }[] = [];
+  rings: { life: number; maxLife: number; x: number; y: number; r: number; vr: number; hot: boolean }[] = [];
   private ringCursor = 0;
   /** Rising credit popups over the world (game feel): spawned on income/spend, drawn in screen space. */
-  private floaters: { x: number; y: number; t: number; ttl: number; text: string; c: string; big: boolean }[] = [];
+  floaters: { x: number; y: number; t: number; ttl: number; text: string; c: string; big: boolean }[] = [];
   /** Kill/event feed lines for the HUD column (game feel); they age out with the player clock. */
   private feed: { id: number; text: string; cls: "info" | "gold" | "bad"; t: number }[] = [];
   private feedId = 1;
   /** Last announced pirate status (5f) — flips re-flag the newscast exactly once. */
   private pirateStatus = false;
   /** Hyperspace jump overlay, 0..1, decays inside updateParticles. */
-  private warpFx = 0;
+  warpFx = 0; // public: render.ts
   /** Damaged-hull smoke timer. */
   private smokeT = 0;
-  private lowParticles = false;
-  private fpsAccum = 0;
-  private fpsWindowStart = 0;
+  lowParticles = false; // public: render.ts
+  fpsAccum = 0; // public: render.ts
+  fpsWindowStart = 0; // public: render.ts
   /**
    * Adaptive pixel quality (Этап 4): 0 = full (2× supersample, all layers),
    * 1 = supersample off (¼ pixels), 2 = also drop nebulas + near dust. Driven by the
    * fps monitor with hysteresis; JS render is ~0.2ms, so fill-rate is the real lever.
    */
-  private quality = 0;
-  private badWindows = 0;
-  private goodWindows = 0;
+  quality = 0; // public: render.ts
+  badWindows = 0; // public: render.ts
+  goodWindows = 0; // public: render.ts
 
   /* player */
   player: PlayerState = Game.freshPlayerState(); // public: economy.ts платит в кредиты
@@ -185,17 +171,17 @@ export class Game {
   dockTarget: Dockable | null = null; // public: economy.ts выбирает кассу сделки
   private bossIdx = -1;
   private bossEscortsSpawned = false;
-  private bgGradient: CanvasGradient | null = null;
-  private splashRemoved = false;
+  bgGradient: CanvasGradient | null = null; // public: render.ts
+  splashRemoved = false; // public: render.ts
 
   /* star systems + gates */
   systemDef: SystemDef = SYSTEMS[0]; // public: missions.ts смотрит систему
   gates: { to: string; name: string; x: number; y: number }[] = []; // public: missions.ts
-  private jumpGate: { to: string; name: string; x: number; y: number } | null = null;
-  private gateTex: HTMLCanvasElement;
+  jumpGate: { to: string; name: string; x: number; y: number } | null = null; // public: render.ts
+  gateTex: HTMLCanvasElement; // public: render.ts
   /** Event horizon behind the arcs: AI vortex art once it loads, procedural glow until then. */
-  private gateHorizonTex: HTMLCanvasElement | HTMLImageElement;
-  private gateSpin = 0;
+  gateHorizonTex: HTMLCanvasElement | HTMLImageElement; // public: render.ts
+  gateSpin = 0; // public: render.ts
   private jumpGrace = 0;
 
   /* contracts + faction reputation + raid events */
@@ -222,7 +208,7 @@ export class Game {
   /** Star chart overlay state — the simulation keeps ticking behind it. */
   mapOpen = false; // public: missions.ts дёргает pushMap
   /** Plotted course in the current system; cleared by a jump. */
-  private waypoint: { x: number; y: number; label: string; targetId: string } | null = null;
+  waypoint: { x: number; y: number; label: string; targetId: string } | null = null; // public: render.ts
   /** Static per-system schematics for the chart (seeded, computed once). */
   private layoutCache = new Map<string, Dockable[]>();
   /** Closed money circulation (Этап 5a): Σ pools + player.credits === MONEY_TOTAL at all times. */
@@ -305,7 +291,7 @@ export class Game {
   private onResizeBound = () => this.onResize();
 
   /** switch adaptive pixel quality tier (see this.quality); rebuilds the canvas backing store */
-  private setQuality(q: number): void {
+  setQuality(q: number): void {
     this.quality = q;
     this.onResize();
   }
@@ -2628,400 +2614,10 @@ export class Game {
   /* ================================================================== */
 
   /** world → screen x (camera + shake already applied by caller via camSx/camSy) */
-  private camSx = 0;
-  private camSy = 0;
+  camSx = 0; // public: render.ts (экранная камера с тряской)
+  camSy = 0; // public: render.ts
 
-  private sx(wx: number): number { return (wx - this.camSx) * this.ppu + window.innerWidth / 2; }
-  private sy(wy: number): number { return (this.camSy - wy) * this.ppu + window.innerHeight / 2; }
-
-  private render(): void {
-    // auto quality: sustained low fps → cheaper particles, then supersample, then layers.
-    // hysteresis: 2 bad windows (4s) to step down, 8 good (16s) to step back up
-    this.fpsAccum += 1;
-    const now = performance.now();
-    if (now - this.fpsWindowStart > 2000) {
-      const fps = (this.fpsAccum * 1000) / Math.max(1, now - this.fpsWindowStart);
-      this.lowParticles = fps < QUALITY.DEGRADE_FPS || this.quality >= 1;
-      if (fps < QUALITY.DEGRADE_FPS) { this.badWindows++; this.goodWindows = 0; }
-      else if (fps >= QUALITY.RECOVER_FPS) { this.goodWindows++; this.badWindows = 0; }
-      else { this.badWindows = 0; this.goodWindows = 0; }
-      if (this.badWindows >= 2 && this.quality < 2) {
-        const want = fps < QUALITY.HEAVY_FPS ? 2 : 1;
-        if (want > this.quality) this.setQuality(want);
-        this.badWindows = 0;
-      } else if (this.goodWindows >= 8 && this.quality > 0) {
-        this.setQuality(this.quality - 1);
-        this.goodWindows = 0;
-      }
-      this.fpsAccum = 0;
-      this.fpsWindowStart = now;
-    }
-
-    const st = this.sm.state;
-    const p = this.ships[0];
-    const ctx = this.ctx;
-    const W = window.innerWidth, H = window.innerHeight;
-
-    // camera target
-    if (st === "title") {
-      this.titleOrbitT += 0.0027;
-      const r = 4600;
-      this.camX += (Math.cos(this.titleOrbitT) * r - this.camX) * 0.01;
-      this.camY += (Math.sin(this.titleOrbitT) * r - this.camY) * 0.01;
-    } else if (p.active) {
-      const lookX = p.x + p.vx * 0.32;
-      const lookY = p.y + p.vy * 0.32;
-      this.camX += (lookX - this.camX) * 0.09;
-      this.camY += (lookY - this.camY) * 0.09;
-    }
-
-    // shake
-    let shX = 0, shY = 0;
-    if (this.shake > 0.2) {
-      shX = (this.rnd() - 0.5) * this.shake;
-      shY = (this.rnd() - 0.5) * this.shake;
-      this.shake *= 0.88;
-    }
-    this.camSx = this.camX + shX;
-    this.camSy = this.camY + shY;
-
-    // clear: subtle deep-space gradient instead of a flat fill
-    const bg = this.bgGradient || (this.bgGradient = (() => {
-      const g = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, Math.hypot(W, H) / 1.6);
-      g.addColorStop(0, "#070c18");
-      g.addColorStop(1, "#02040a");
-      return g;
-    })());
-    ctx.fillStyle = bg;
-    ctx.fillRect(0, 0, W, H);
-    perf.begin();
-
-    /* parallax layers: effective world pos = s - cam * f;
-       tier 2 drops the nebula (f .3) and near-dust (f .7) layers — the two biggest blits */
-    for (const layer of this.layers) {
-      if (this.quality >= 2 && layer.f >= 0.3) continue;
-      const ox = this.camSx * layer.f, oy = this.camSy * layer.f;
-      for (const star of layer.stars) {
-        const x = (star.x - ox) * this.ppu + W / 2;
-        const y = H / 2 - (star.y - oy) * this.ppu;
-        if (x < -4 || x > W + 4 || y < -4 || y > H + 4) continue;
-        ctx.fillStyle = star.c;
-        const r = star.r;
-        ctx.fillRect(x - r / 2, y - r / 2, r, r);
-      }
-      for (const neb of layer.nebulas) {
-        const size = neb.scale * this.ppu;
-        const x = (neb.x - ox) * this.ppu + W / 2;
-        const y = H / 2 - (neb.y - oy) * this.ppu;
-        if (x + size / 2 < 0 || x - size / 2 > W || y + size / 2 < 0 || y - size / 2 > H) continue;
-        if (neb.additive) {
-          // painted-on-black art: 'lighter' makes its darks vanish into the starfield
-          ctx.globalCompositeOperation = "lighter";
-          ctx.globalAlpha = 0.3;
-          ctx.drawImage(neb.tex, x - size / 2, y - size / 2, size, size);
-          ctx.globalCompositeOperation = "source-over";
-        } else {
-          ctx.globalAlpha = 0.95;
-          ctx.drawImage(neb.tex, x - size / 2, y - size / 2, size, size);
-        }
-        ctx.globalAlpha = 1;
-      }
-    }
-
-    perf.mark("parallax");
-
-    /* orbit rings */
-    ctx.lineWidth = 1;
-    for (const d of this.dockables) {
-      const r = d.orbit * this.ppu;
-      const cx = this.sx(0), cy = this.sy(0);
-      if (cx + r < 0 || cx - r > W || cy + r < 0 || cy - r > H) continue;
-      ctx.strokeStyle = d.isStation ? "rgba(46,95,143,0.16)" : "rgba(42,74,102,0.24)";
-      ctx.beginPath();
-      ctx.arc(cx, cy, r, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-    // star heat ring
-    {
-      const r = WORLD_CFG.STAR_HEAT_RADIUS * this.ppu;
-      const cx = this.sx(0), cy = this.sy(0);
-      ctx.strokeStyle = "rgba(255,84,51,0.3)";
-      ctx.setLineDash([14, 10]);
-      ctx.beginPath();
-      ctx.arc(cx, cy, r, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
-
-    /* the star */
-    {
-      const size = WORLD_CFG.STAR_RADIUS * 5.2 * this.ppu;
-      const x = this.sx(0), y = this.sy(0);
-      ctx.drawImage(this.starTex, x - size / 2, y - size / 2, size, size);
-    }
-
-    /* planets + stations */
-    for (let i = 0; i < this.dockables.length; i++) {
-      const d = this.dockables[i];
-      const scale = (d.isStation ? d.radius * 2.6 : d.radius * 2.1) * this.ppu;
-      const x = this.sx(d.x), y = this.sy(d.y);
-      if (x + scale / 2 < 0 || x - scale / 2 > W || y + scale / 2 < 0 || y - scale / 2 > H) continue;
-      this.dockSpin[i] += this.dockSpinVel[i];
-      ctx.save();
-      ctx.translate(x, y);
-      ctx.rotate(this.dockSpin[i]);
-      ctx.drawImage(this.dockTex[i], -scale / 2, -scale / 2, scale, scale);
-      ctx.restore();
-      // docking range hint for the current target
-      if (this.dockTarget === d && st === "playing") {
-        ctx.strokeStyle = "rgba(84,255,210,0.55)";
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.arc(x, y, scale / 2 + 10, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-      // raid heist: an orange arc closing over the storehouse being emptied (5d)
-      if (this.grabTarget === d.id && this.raid && this.raid.timeLeft > 0) {
-        const frac = Math.max(0, Math.min(1, this.grabT / RAID.GRAB_TIME));
-        ctx.strokeStyle = "#ff9a3a";
-        ctx.lineWidth = 4;
-        ctx.beginPath();
-        ctx.arc(x, y, scale / 2 + 16, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2);
-        ctx.stroke();
-      }
-    }
-
-    /* hyperspace gates — additive event horizon behind slowly counter-rotating arcs */
-    this.gateSpin += 0.006;
-    const gPulse = 1 + 0.055 * Math.sin(this.gateSpin * 2.2);
-    for (const g of this.gates) {
-      const scale = GATE_CFG.RADIUS * 2.4 * this.ppu;
-      const x = this.sx(g.x), y = this.sy(g.y);
-      if (x + scale < 0 || x - scale > W || y + scale < 0 || y - scale > H) continue;
-      ctx.save();
-      ctx.translate(x, y);
-      // horizon: the vortex art is painted on black, so "lighter" drops the backdrop and keeps the glow
-      const hs = scale * 0.56 * gPulse;
-      ctx.save();
-      ctx.globalCompositeOperation = "lighter";
-      ctx.globalAlpha = 0.9 * (0.92 + 0.08 * gPulse);
-      ctx.rotate(-this.gateSpin * 0.45);
-      ctx.drawImage(this.gateHorizonTex, -hs / 2, -hs / 2, hs, hs);
-      ctx.restore();
-      ctx.rotate(this.gateSpin);
-      ctx.drawImage(this.gateTex, -scale / 2, -scale / 2, scale, scale);
-      ctx.restore();
-      ctx.font = `${Math.max(11, Math.round(14 * this.ppu))}px ui-sans-serif, system-ui, sans-serif`;
-      ctx.textAlign = "center";
-      ctx.fillStyle = "rgba(215,232,238,0.85)";
-      ctx.fillText(`⇄ ${g.name}`, x, y + scale / 2 + 20 * this.ppu);
-      if (this.jumpGate === g && st === "playing") {
-        ctx.strokeStyle = "rgba(84,255,210,0.55)";
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.arc(x, y, scale / 2 + 10, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-    }
-
-    perf.mark("bodies");
-
-    /* pickups */
-    const t = now * 0.001;
-    for (const pk of this.pickups) {
-      if (!pk.active) continue;
-      const size = 46 * this.ppu;
-      const x = this.sx(pk.x), y = this.sy(pk.y) + Math.sin(t * 2 + pk.amount) * 6 * this.ppu;
-      if (x < -40 || x > W + 40 || y < -40 || y > H + 40) continue;
-      ctx.save();
-      ctx.translate(x, y);
-      ctx.rotate(Math.sin(t * 1.4 + pk.amount) * 0.3);
-      ctx.drawImage(pk.kind === "credits" ? this.pickupTex.credits : this.pickupTex.cargo, -size / 2, -size / 2, size, size);
-      ctx.restore();
-    }
-
-    /* ships */
-    for (let i = 0; i < MAX_SHIPS; i++) {
-      const s = this.ships[i];
-      if (!s.active) continue;
-      const scale = s.radius * SHIP_SCALE * this.ppu;
-      const x = this.sx(s.x), y = this.sy(s.y);
-      if (x + scale / 2 < 0 || x - scale / 2 > W || y + scale / 2 < 0 || y - scale / 2 > H) continue;
-      ctx.save();
-      ctx.translate(x, y);
-      ctx.rotate(Math.PI / 2 - s.angle); // texture points up; world angle θ → canvas rotation π/2 − θ
-      const texs = s.cruiser ? this.shipTexMap.cruiser : this.shipTexMap[s.faction];
-      ctx.drawImage(texs[texs.length > 1 ? i & 1 : 0], -scale / 2, -scale / 2, scale, scale);
-      ctx.restore();
-      // shield ring flash after recent hits
-      if (s.shield > 0 && s.sinceHit < 0.35) {
-        ctx.strokeStyle = `rgba(111,195,255,${0.7 - s.sinceHit * 2})`;
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.arc(x, y, s.radius * this.ppu + 6, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-      // pirate status (5f): dashed kin rings — blue around the raiders, hostile red around patrol
-      if (i !== 0 && this.isPirate() && (s.faction === "pirate" || s.faction === "patrol")) {
-        ctx.strokeStyle = s.faction === "pirate" ? "rgba(90,159,255,0.45)" : "rgba(255,90,74,0.45)";
-        ctx.lineWidth = 2;
-        ctx.setLineDash([7, 7]);
-        ctx.beginPath();
-        ctx.arc(x, y, s.radius * this.ppu + 10, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.setLineDash([]);
-      }
-    }
-
-    /* bolts */
-    for (const b of this.bolts) {
-      if (!b.active) continue;
-      const size = (b.friendly ? 15 : 12) * Math.max(this.ppu, 0.6);
-      const x = this.sx(b.x), y = this.sy(b.y);
-      if (x < -20 || x > W + 20 || y < -20 || y > H + 20) continue;
-      ctx.drawImage(b.friendly ? this.boltTexPlayer : this.boltTexEnemy, x - size / 2, y - size / 2, size, size);
-    }
-
-    perf.mark("entities");
-
-    /* particles */
-    ctx.globalCompositeOperation = "lighter";
-    const pal = paletteTex();
-    for (const d of this.particles) {
-      if (d.life <= 0) continue;
-      const x = this.sx(d.x), y = this.sy(d.y);
-      if (x < -20 || x > W + 20 || y < -20 || y > H + 20) continue;
-      const k = d.life / d.maxLife;
-      ctx.globalAlpha = k;
-      const size = d.size * (0.5 + k) * Math.max(this.ppu, 0.55);
-      ctx.drawImage(pal[d.ci], x - size / 2, y - size / 2, size, size);
-    }
-    // blast shockwave rings
-    for (const rg of this.rings) {
-      if (rg.life <= 0) continue;
-      const x = this.sx(rg.x), y = this.sy(rg.y);
-      const rr = rg.r * this.ppu;
-      if (x + rr < 0 || x - rr > W || y + rr < 0 || y - rr > H) continue;
-      const k = Math.max(0, rg.life / rg.maxLife);
-      ctx.globalAlpha = Math.min(1, k * 1.3) * 0.85;
-      ctx.strokeStyle = rg.hot ? "rgb(255,190,120)" : "rgb(255,235,190)";
-      ctx.lineWidth = Math.max(1, (rg.hot ? 9 : 5) * k);
-      ctx.beginPath(); ctx.arc(x, y, rr, 0, Math.PI * 2); ctx.stroke();
-      if (rg.hot) {
-        ctx.globalAlpha *= 0.5;
-        ctx.strokeStyle = "rgb(255,255,255)";
-        ctx.lineWidth = Math.max(1, 4 * k);
-        ctx.beginPath(); ctx.arc(x, y, rr * 0.72, 0, Math.PI * 2); ctx.stroke();
-      }
-    }
-    ctx.globalCompositeOperation = "source-over";
-    ctx.globalAlpha = 1;
-    perf.mark("fx");
-
-    /* plotted course: diamond over the target, or a compass arrow pinned to the screen edge */
-    if (this.waypoint && st === "playing") {
-      const wx = this.sx(this.waypoint.x), wy = this.sy(this.waypoint.y);
-      const margin = 46;
-      const onScreen = wx > margin && wx < W - margin && wy > margin && wy < H - margin;
-      ctx.save();
-      ctx.strokeStyle = "#54ffd2";
-      ctx.lineWidth = 2;
-      ctx.shadowColor = "rgba(84,255,210,0.8)";
-      ctx.shadowBlur = 8;
-      if (onScreen) {
-        ctx.translate(wx, wy);
-        ctx.rotate(Math.PI / 4);
-        ctx.strokeRect(-9, -9, 18, 18);
-      } else {
-        const ps = this.ships[0];
-        const px = this.sx(ps.x), py = this.sy(ps.y);
-        const a = Math.atan2(wy - py, wx - px);
-        const dx = Math.cos(a), dy = Math.sin(a);
-        let t = 4000;
-        if (dx > 1e-6) t = Math.min(t, (W - margin - px) / dx); else if (dx < -1e-6) t = Math.min(t, (margin - px) / dx);
-        if (dy > 1e-6) t = Math.min(t, (H - margin - py) / dy); else if (dy < -1e-6) t = Math.min(t, (margin - py) / dy);
-        const ax = px + dx * t, ay = py + dy * t;
-        ctx.translate(ax, ay);
-        ctx.rotate(a);
-        ctx.beginPath();
-        ctx.moveTo(13, 0); ctx.lineTo(-8, -9); ctx.lineTo(-8, 9); ctx.closePath();
-        ctx.stroke();
-        const dist = Math.hypot(this.waypoint.x - ps.x, this.waypoint.y - ps.y);
-        ctx.rotate(-a);
-        ctx.shadowBlur = 0;
-        ctx.font = "11px ui-monospace, Consolas, monospace";
-        ctx.fillStyle = "#54ffd2";
-        ctx.textAlign = "center";
-        ctx.fillText(`${(dist / 1000).toFixed(1)}k`, 0, 26);
-      }
-      ctx.restore();
-    }
-
-    /* aim reticle (desktop) */
-    if (st === "playing" && !this.input.touchFiring) {
-      const mx = this.input.mouseX, my = this.input.mouseY;
-      ctx.strokeStyle = "rgba(84,255,210,0.75)";
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.arc(mx, my, 11, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(mx - 17, my); ctx.lineTo(mx - 6, my);
-      ctx.moveTo(mx + 6, my); ctx.lineTo(mx + 17, my);
-      ctx.moveTo(mx, my - 17); ctx.lineTo(mx, my - 6);
-      ctx.moveTo(mx, my + 6); ctx.lineTo(mx, my + 17);
-      ctx.stroke();
-    }
-
-    /* floating credit popups (game feel): rise and fade in screen space */
-    if (this.floaters.length && st === "playing") {
-      ctx.save();
-      ctx.textAlign = "center";
-      for (const f of this.floaters) {
-        const k = f.t / f.ttl;
-        ctx.globalAlpha = k < 0.6 ? 1 : Math.max(0, 1 - (k - 0.6) / 0.4);
-        ctx.font = `${f.big ? 800 : 700} ${Math.round((f.big ? 17 : 13) * this.ppu)}px ui-monospace, Consolas, monospace`;
-        const fx = this.sx(f.x), fy = this.sy(f.y) - k * 46 * this.ppu;
-        ctx.lineWidth = 3;
-        ctx.strokeStyle = "rgba(2,6,14,0.9)";
-        ctx.strokeText(f.text, fx, fy);
-        ctx.fillStyle = f.c;
-        ctx.fillText(f.text, fx, fy);
-      }
-      ctx.restore();
-    }
-
-    /* hyperspace arrival: radial cyan flash + receding speed streaks */
-    if (this.warpFx > 0) {
-      const k = this.warpFx;
-      ctx.save();
-      ctx.globalCompositeOperation = "lighter";
-      const rg = ctx.createRadialGradient(W / 2, H / 2, 10, W / 2, H / 2, Math.hypot(W, H) / 2);
-      rg.addColorStop(0, `rgba(180,255,240,${0.65 * k})`);
-      rg.addColorStop(1, "rgba(60,200,255,0)");
-      ctx.fillStyle = rg;
-      ctx.fillRect(0, 0, W, H);
-      ctx.strokeStyle = `rgba(200,255,250,${k * 0.55})`;
-      ctx.lineWidth = 2;
-      const r0 = 60 + (1 - k) * Math.hypot(W, H) * 0.5;
-      for (let i = 0; i < 14; i++) {
-        const a = (i / 14) * Math.PI * 2 + 0.3;
-        const r1 = r0 + 140 + 260 * (1 - k);
-        ctx.beginPath();
-        ctx.moveTo(W / 2 + Math.cos(a) * r0, H / 2 + Math.sin(a) * r0);
-        ctx.lineTo(W / 2 + Math.cos(a) * r1, H / 2 + Math.sin(a) * r1);
-        ctx.stroke();
-      }
-      ctx.restore();
-    }
-
-    perf.end();
-    window.__GAME_READY__ = true;
-    if (!this.splashRemoved) {
-      this.splashRemoved = true;
-      document.getElementById("boot-splash")?.remove();
-    }
-  }
+  private render(): void { renderFrame(this); }
 
   /* ================================================================== */
   /* UI bridge pushes                                                    */
