@@ -28,7 +28,7 @@ import {
 import type { SystemDef } from "./config";
 import { loadImage, loadPlanetTexture } from "./assets";
 import { economyTick, findDockTarget, generateWorld, goodName, kindName, priceOf, refreshAllPrices, updateOrbits } from "./world";
-import { loadSave, writeSave } from "./save";
+import { loadSave, writeSave, importSaveJson } from "./save";
 import { gameApi, uiBridge, type EndStats, type GameApi, type HudData, type MapSnapshot, type RadioSnapshot, type StationSnapshot } from "./uiBridge";
 import type { ActiveContract, Bolt, ContractOffer, Dockable, Faction, InstalledGear, MoneyPools, OccupationState, Pickup, PlayerState, PoolId, RaidOp, SaveGame, Ship } from "./types";
 import { AiState } from "./types";
@@ -1286,8 +1286,7 @@ export class Game {
     const save: SaveGame = {
       v: SAVE_VERSION,
       seed: this.seed,
-      system: this.systemDef.id,
-      player: {
+      system: this.systemDef.id,      player: {
         x: Math.round(p.x), y: Math.round(p.y),
         credits: Math.round(this.player.credits),
         hull: Math.round(p.hp), shield: Math.round(p.shield),
@@ -1339,6 +1338,21 @@ export class Game {
     };
     writeSave(save);
     uiBridge.set({ hasSave: true });
+  }
+
+  /** Этап 9c: выгрузка сейва в файл — свежая запись, потом чтение через валидатор. */
+  exportSave(): string | null {
+    this.saveNow();
+    const s = loadSave();
+    return s ? JSON.stringify(s) : null;
+  }
+
+  /** Этап 9c: загрузка сейва из файла; валидный — сразу восстанавливаемся. */
+  importSave(json: string): boolean {
+    if (!importSaveJson(json)) return false;
+    this.continueGame();
+    this.setNews("Сейв загружен из файла.");
+    return true;
   }
 
   /**
@@ -2887,6 +2901,8 @@ export class Game {
       setWaypoint: (kind, id) => this.setWaypoint(kind, id),
       clearWaypoint: () => this.clearWaypoint(),
       startRaid: (id) => this.startRaid(id),
+      exportSave: () => this.exportSave(),
+      importSave: (json) => this.importSave(json),
     };
     gameApi.current = api;
     // debug bridges (Этап 9b): only in `vite dev` or the test build (--mode test, .env.test).

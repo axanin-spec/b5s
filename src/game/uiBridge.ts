@@ -231,6 +231,10 @@ export interface GameApi {
   clearWaypoint(): void;
   /** Launch a raid operation on a free system (Этап 5d). */
   startRaid(systemId: string): void;
+  /** Export the current save as a JSON string (Этап 9c); null when nothing is stored. */
+  exportSave(): string | null;
+  /** Import a save from a JSON file (Этап 9c); true when the file passed validation. */
+  importSave(json: string): boolean;
 }
 
 export const gameApi: { current: GameApi | null } = { current: null };

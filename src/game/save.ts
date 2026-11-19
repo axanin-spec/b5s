@@ -48,7 +48,11 @@ function validFleet(p: SaveGame["player"]): boolean {
 
 /** Parse and validate; returns null on any shape violation (caller falls back to a new game). */
 export function loadSave(): SaveGame | null {
-  const raw = storage.get<unknown>(SAVE_KEY, null);
+  return validateSave(storage.get<unknown>(SAVE_KEY, null));
+}
+
+/** The shape gate shared by localStorage load and file import (Этап 9c). */
+export function validateSave(raw: unknown): SaveGame | null {
   if (typeof raw !== "object" || raw === null) return null;
   const s = raw as SaveGame;
   if (s.v !== SAVE_VERSION) return null;
@@ -101,6 +105,19 @@ export function loadSave(): SaveGame | null {
 
 export function writeSave(save: SaveGame): void {
   storage.set(SAVE_KEY, save);
+}
+
+/**
+ * Import a save from a JSON file (Этап 9c): same validation gate as loadSave —
+ * a shaped-but-foreign file is rejected, a valid one replaces the stored save.
+ */
+export function importSaveJson(json: string): boolean {
+  let raw: unknown;
+  try { raw = JSON.parse(json); } catch { return false; }
+  const s = validateSave(raw);
+  if (!s) return false;
+  writeSave(s);
+  return true;
 }
 
 export function hasSave(): boolean {
