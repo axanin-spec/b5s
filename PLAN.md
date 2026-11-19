@@ -326,6 +326,11 @@
   EconCtx/RadioCtx, в Game остались тонкие обёртки — точки вызова не тронуты. Поля
   pools/player/ships/dockables/dockTarget и методы hereOccupied/floater/pushHud/cargoMax/
   cargoUsed опубликованы. game.ts: 4178 → 4073 строки. Регрессия 7/7 зелёная.
+  **Спил 2/4 ✅ 2026-11-19: `fleet.ts` (210 строк)** — фит-статы (hullDef/equipped/guns/
+  bestRank/щит/тяга/трюм), гейты верфи и лавки (clanMarket/rankCap/lineGate/hullGate),
+  repairCost, чистая часть setShip (setShipFit), fleetSnapshot целиком. Чистые функции
+  от PlayerState + FleetCtx; звук/новости/сейв остались в обёртках Game.
+  game.ts: 4073 → 3946 строк. Регрессия 7/7 зелёная.
 - [ ] **9b. Дебаг-мосты только в dev.** `__sim`/`__perf`/`__econAudit`/`__input` сейчас открыты
   в прод-сборке — завернуть в `import.meta.env.DEV`, тестам дать флаг сборки.
 - [ ] **9c. Экспорт/импорт сейва.** Сейв только в localStorage: очистка браузера = потеря игры.
