@@ -6,14 +6,22 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:test": "tsc -b && vite build --mode test",
     "check": "tsc -b",
     "preview": "vite preview",
+    "preverify": "npm run build:test",
     "verify": "node scripts/verify-game.mjs",
+    "prebalance": "npm run build:test",
     "balance": "node scripts/balance-test.mjs",
+    "prefleet": "npm run build:test",
     "fleet": "node scripts/fleet-test.mjs",
+    "presmuggle": "npm run build:test",
     "smuggle": "node scripts/smuggle-test.mjs",
+    "preloot": "npm run build:test",
     "loot": "node scripts/loot-test.mjs",
+    "prewatch": "npm run build:test",
     "watch": "node scripts/watch-test.mjs",
+    "prefocus": "npm run build:test",
     "focus": "node scripts/focus-test.mjs"
   },
   "dependencies": {

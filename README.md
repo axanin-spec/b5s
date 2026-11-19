@@ -44,9 +44,13 @@
 ```bash
 npm install
 npm run dev      # разработка — http://localhost:3000
-npm run build    # прод-сборка в dist/
+npm run build    # прод-сборка в dist/ (без дебаг-мостов, Этап 9b)
+# автотесты сами пересобирают тестовый бандл с мостами __sim/__perf (pre-хук → build:test):
 npm run verify   # смоук-тест сборки в браузере
-npm run balance  # автотест закрытой экономики (после build)
-npm run fleet    # автотест верфи и снаряжения (после build)
-npm run focus    # автотест ввода и карты (после build)
+npm run balance  # автотест закрытой экономики
+npm run fleet    # автотест верфи и снаряжения
+npm run focus    # автотест ввода и карты
+npm run smuggle  # автотест клановых бортников
+npm run loot     # автотест трофейных модулей
+npm run watch    # автотест казны патруля и крейсера
 ```

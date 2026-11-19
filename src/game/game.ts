@@ -37,6 +37,9 @@ const MAX_SHIPS = 40;
 const MAX_BOLTS = 200;
 const MAX_PICKUPS = 28;
 
+/** Debug/test bridges on window (Этап 9b): dev server or the test build only, never prod. */
+const BRIDGES = import.meta.env.DEV || import.meta.env.VITE_BRIDGES === "1";
+
 /** Ship textures are drawn pointing up; hull visual radius ≈ texture half-height. */
 const SHIP_SCALE = 2.4;
 
@@ -2886,8 +2889,9 @@ export class Game {
       startRaid: (id) => this.startRaid(id),
     };
     gameApi.current = api;
-    // debug bridge for external automation (same contract family as __gameProbe): the live
-    // module instances are otherwise unreachable from an injected script's module map
+    // debug bridges (Этап 9b): only in `vite dev` or the test build (--mode test, .env.test).
+    // The production bundle never publishes __sim/__perf/__gameApi & co on window.
+    if (!BRIDGES) return;
     (window as unknown as Record<string, unknown>).__gameApi = gameApi;
     (window as unknown as Record<string, unknown>).__uiBridge = uiBridge;
     // section profiler for perf work (Этап 4): enable → read rolling per-frame ms report
