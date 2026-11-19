@@ -30,14 +30,16 @@ the render loop lives entirely in `src/game/` and never touches React state, so 
 re-render cost. Writing a pure-canvas game is still fine; just keep `main.tsx` / `App.tsx` / `pages/Home.tsx`
 in place as the mount point.
 
-## Pre-installed dependencies (usable via npm install, no on-the-spot downloads)
+## Dependencies actually in use
 
-- `three` (+ `@types/three`) — 3D rendering (the default direction; if 2D is explicitly wanted, `phaser` is also pre-installed)
-- `@dimforge/rapier3d-compat` — physics engine
-- `phaser` — 2D engine (fallback)
 - `vite` + `typescript` + `react/react-dom` + `react-router` + `@vitejs/plugin-react` — build and UI shell
-- `playwright` + `@playwright/test` — browser self-check
-- `vitest`, `lucide-react`
+- `playwright` + `@playwright/test` — browser self-check (the `npm run verify|balance|fleet|focus|smuggle|loot|watch` probes)
+
+The original template also pre-installed `three` (+`@types/three`), `@dimforge/rapier3d-compat`,
+`phaser`, `lucide-react` and `vitest` as convenience engines. This game renders through its own
+Canvas-2D pipeline and its tests are Playwright probes, so none of them were ever imported; they were
+removed (Этап 9d) to keep install lean. Nothing in the backend graft depends on them — reinstall any
+of them on the spot if a future feature actually needs one.
 
 ## Reusable base components (src/game/, take what you need, or discard entirely)
 
