@@ -14,6 +14,7 @@ import type { EquipCat, EquipItem, HullDef, HullId, YardTier } from "./config";
 import { AudioSystem } from "./audio";
 import * as econ from "./economy";
 import * as fleet from "./fleet";
+import * as missions from "./missions";
 import { GameLoop } from "./engine";
 import { Input } from "./input";
 import { perf } from "./perf";
@@ -111,7 +112,7 @@ export class Game {
   private loop: GameLoop;
   private input: Input;
   audio = new AudioSystem(); // public: экономика (economy.ts) играет звуки сделок
-  private sm = new GameStateMachine();
+  sm = new GameStateMachine(); // public: missions.ts проверяет фазу
   private disposed = false;
 
   /* view */
@@ -123,7 +124,7 @@ export class Game {
 
   /* world */
   private seed = 1;
-  private rnd = mulberry32(1);
+  rnd = mulberry32(1); // public: missions.ts тасует доску контрактов
   dockables: Dockable[] = []; // public: economy.ts торгует с рынков доков
   private dockTex: HTMLCanvasElement[] = [];
   private starTex: HTMLCanvasElement;
@@ -188,8 +189,8 @@ export class Game {
   private splashRemoved = false;
 
   /* star systems + gates */
-  private systemDef: SystemDef = SYSTEMS[0];
-  private gates: { to: string; name: string; x: number; y: number }[] = [];
+  systemDef: SystemDef = SYSTEMS[0]; // public: missions.ts смотрит систему
+  gates: { to: string; name: string; x: number; y: number }[] = []; // public: missions.ts
   private jumpGate: { to: string; name: string; x: number; y: number } | null = null;
   private gateTex: HTMLCanvasElement;
   /** Event horizon behind the arcs: AI vortex art once it loads, procedural glow until then. */
@@ -198,28 +199,28 @@ export class Game {
   private jumpGrace = 0;
 
   /* contracts + faction reputation + raid events */
-  private contract: ActiveContract | null = null;
+  contract: ActiveContract | null = null; // public: missions.ts
   /** Broker offers generated on docking; empty while a contract is active. */
-  private offers: ContractOffer[] = [];
-  private contractSeq = 0;
-  private raidSeq = 0;
+  offers: ContractOffer[] = []; // public: missions.ts
+  contractSeq = 0; // public: missions.ts
+  raidSeq = 0; // public: missions.ts
   /** Convoy-raid event currently on the news wire, null = quiet. */
-  private convoy: { id: number; t: number; done: number; traderIdx: number } | null = null;
-  private convoyT: number = CONVOY.FIRST_DELAY;
+  convoy: { id: number; t: number; done: number; traderIdx: number } | null = null; // public: missions.ts
+  convoyT: number = CONVOY.FIRST_DELAY; // public: missions.ts
 
   /* raid operation (Этап 5d: налёт — операция с карты) */
   /** Active/cooled-down raid on the ops desk, null = the desk is clear. */
-  private raid: RaidOp | null = null;
+  raid: RaidOp | null = null; // public: missions.ts
   /** Storehouse being emptied right now (dockable id) + elapsed hover seconds. */
-  private grabTarget: string | null = null;
-  private grabT = 0;
+  grabTarget: string | null = null; // public: missions.ts
+  grabT = 0; // public: missions.ts
 
   /* pirate occupation front + star chart */
-  private occ: OccupationState = {
+  occ: OccupationState = { // public: missions.ts
     systemId: OCCUPATION.START_SYSTEM, held: true, t: OCCUPATION.FLAGSHIP_BUILD, flagshipBuilt: false,
   };
   /** Star chart overlay state — the simulation keeps ticking behind it. */
-  private mapOpen = false;
+  mapOpen = false; // public: missions.ts дёргает pushMap
   /** Plotted course in the current system; cleared by a jump. */
   private waypoint: { x: number; y: number; label: string; targetId: string } | null = null;
   /** Static per-system schematics for the chart (seeded, computed once). */
@@ -402,7 +403,7 @@ export class Game {
     return this.occ.held && this.occ.systemId === this.systemDef.id;
   }
 
-  private systemName(id: string): string {
+  systemName(id: string): string {
     return SYSTEMS.find((s) => s.id === id)?.name ?? id;
   }
 
@@ -484,7 +485,7 @@ export class Game {
   /* Spawning                                                            */
   /* ================================================================== */
 
-  private spawnShip(faction: Faction, x: number, y: number): number {
+  spawnShip(faction: Faction, x: number, y: number): number {
     for (let i = 1; i < MAX_SHIPS; i++) {
       const s = this.ships[i];
       if (s.active) continue;
@@ -522,7 +523,7 @@ export class Game {
     return -1;
   }
 
-  private freeShip(i: number): void {
+  freeShip(i: number): void {
     const s = this.ships[i];
     if (s.active && s.faction === "trader" && s.wallet > 0) {
       // each fleet's working capital returns to ITS fund: Alliance for caravans, clans for haulers (Этап 8)
@@ -552,7 +553,7 @@ export class Game {
    * empty — the dock where the biggest buy→sell spread awaits. Small jitter keeps the
    * five caravans from all chasing the same trade.
    */
-  private pickTraderRoute(idx: number): void {
+  pickTraderRoute(idx: number): void {
     const s = this.ships[idx];
     const n = this.dockables.length;
     if (n === 0) return;
@@ -1410,7 +1411,7 @@ export class Game {
     this.sm.transition("victory");
   }
 
-  private setNews(text: string): void {
+  setNews(text: string): void {
     this.pushFeed(text);
     uiBridge.set({ news: text, feed: this.feedView() });
     this.newsT = 14;
@@ -1706,12 +1707,12 @@ export class Game {
    * their fire, radars repaint (raiders blue, patrol red), ordinary stations and
    * planets refuse the terminal — only the occupied system's black market is open.
    */
-  private isPirate(): boolean {
+  isPirate(): boolean {
     return this.patrolHostile();
   }
 
   /** One-shot newscast when pirate status flips — called after any rep/outlaw change. */
-  private syncPirateStatus(): void {
+  syncPirateStatus(): void {
     const now = this.patrolHostile();
     if (now === this.pirateStatus) return;
     this.pirateStatus = now;
@@ -1733,7 +1734,7 @@ export class Game {
     return f === "boss" ? "#d26aff" : "#ffd24a";
   }
 
-  private addRep(d: { patrol?: number; trader?: number; clan?: number }): void {
+  addRep(d: { patrol?: number; trader?: number; clan?: number }): void {
     const r = this.player.rep;
     if (d.patrol) r.patrol = Math.max(REP.MIN, Math.min(REP.MAX, r.patrol + d.patrol));
     if (d.trader) r.trader = Math.max(REP.MIN, Math.min(REP.MAX, r.trader + d.trader));
@@ -1782,308 +1783,34 @@ export class Game {
   }
 
   /** One offer of each kind per docking; the broker restocks every undock. */
-  private genOffers(here: Dockable): void {
-    this.offers = [];
-    // licensed brokers don't work in pirate space — there the clans post their own board (6b),
-    // and the lair keeps its own board too (6c)
-    if (this.hereOccupied() || here.id === PIRATE_BRANCH.LAIR.id) { this.genClanOffers(here); return; }
-    // licensed brokers never route cargo to the smuggler lair — officially it doesn't exist
-    const others = this.dockables.filter((d) => d.id !== here.id && d.id !== PIRATE_BRANCH.LAIR.id);
-    if (others.length === 0) return;
-    const jit = (base: number) => Math.round((base * (1 + (this.rnd() * 2 - 1) * CONTRACTS.JITTER)) / 50) * 50;
-    const boost = 1 + this.systemDef.pirateBoost * 0.2;
-
-    const n = 4 + Math.floor(this.rnd() * 3);
-    this.offers.push({
-      id: ++this.contractSeq, kind: "hunt", funder: "alliance",
-      title: "Охота на пиратов",
-      desc: `Уничтожить ${n} пиратов в системе ${this.systemDef.name}.`,
-      reward: jit((650 + 140 * n) * boost), timeLimit: CONTRACTS.TIME_HUNT,
-      need: n, goodId: "", qty: 0, destId: "", destName: "",
-    });
-
-    const dest = others[Math.floor(this.rnd() * others.length)];
-    const g = GOODS[Math.floor(this.rnd() * GOODS.length)];
-    const qty = 6 + Math.floor(this.rnd() * 7);
-    this.offers.push({
-      id: ++this.contractSeq, kind: "transport", funder: "alliance",
-      title: "Курьерский рейс",
-      desc: `Передать запечатанный контейнер (${qty} ед. «${goodName(g.id)}»). Пункт назначения: ${dest.name}. Трюм не занимает.`,
-      reward: jit(900 + qty * 95), timeLimit: CONTRACTS.TIME_TRANSPORT,
-      need: 1, goodId: g.id, qty, destId: dest.id, destName: dest.name,
-    });
-
-    const dest2 = others[Math.floor(this.rnd() * others.length)];
-    const callsign = `${CONTRACTS.CALLSIGNS[Math.floor(this.rnd() * CONTRACTS.CALLSIGNS.length)]}-${2 + Math.floor(this.rnd() * 8)}`;
-    this.offers.push({
-      id: ++this.contractSeq, kind: "escort", funder: "alliance",
-      title: "Эскорт транспорта",
-      desc: `Сопроводить транспорт «${callsign}». Пункт назначения: ${dest2.name}. Собьют его — контракт провален.`,
-      reward: jit(1150), timeLimit: CONTRACTS.TIME_ESCORT,
-      need: 1, goodId: "", qty: 0, destId: dest2.id, destName: dest2.name,
-    });
-  }
+  private genOffers(here: Dockable): void { missions.genOffers(this, here); }
 
   /**
    * The clans' board (Этап 6b) — posted only in occupied systems and, later, at the
    * lair. Zero trust (clan ≤ UNFRIENDLY) and nobody even hails you here. Clan money
    * pays, clan law scores: patrol and Alliance standings burn on the way.
    */
-  private genClanOffers(here: Dockable): void {
-    if (this.player.rep.clan <= REP.UNFRIENDLY) return;
-    const jit = (base: number) => Math.round((base * (1 + (this.rnd() * 2 - 1) * CONTRACTS.JITTER)) / 50) * 50;
+  private genClanOffers(here: Dockable): void { missions.genClanOffers(this, here); }
 
-    const n = 3 + Math.floor(this.rnd() * 3);
-    this.offers.push({
-      id: ++this.contractSeq, kind: "hunt", funder: "clan",
-      title: "Разборки кланов",
-      desc: `Соседний клан нагрянул «в гости» в системе ${this.systemDef.name}. Проводите ${n} головорезов обратно — чей флаг им удобнее поднять, решайте сами.`,
-      reward: jit(600 + 150 * n), timeLimit: CONTRACTS.TIME_HUNT,
-      need: n, goodId: "", qty: 0, destId: "", destName: "",
-    });
+  acceptContract(id: number): void { missions.acceptContract(this, id); }
 
-    const k = 2 + Math.floor(this.rnd() * 3);
-    this.offers.push({
-      id: ++this.contractSeq, kind: "bounty", funder: "clan",
-      title: "Головы патруля",
-      desc: `Катера патруля разгуливают по системе ${this.systemDef.name} как у себя в доке. Снимите ${k} — трибунал спрашивать не будет, кланы платят вперёд глазами.`,
-      reward: jit(950 + 190 * k), timeLimit: CONTRACTS.TIME_HUNT,
-      need: k, goodId: "", qty: 0, destId: "", destName: "",
-    });
+  cancelContract(): void { missions.cancelContract(this); }
 
-    // at the lair a wanted captain has nowhere to deliver: Alliance docks refuse him,
-    // so the smuggling run only posts when the client can legally dock (6c)
-    const atLair = here.id === PIRATE_BRANCH.LAIR.id;
-    const others = atLair && this.isPirate() ? [] : this.dockables.filter((d) => d.id !== here.id);
-    if (others.length > 0) {
-      const dest = others[Math.floor(this.rnd() * others.length)];
-      const g = GOODS[Math.floor(this.rnd() * GOODS.length)];
-      const qty = 5 + Math.floor(this.rnd() * 6);
-      this.offers.push({
-        id: ++this.contractSeq, kind: "transport", funder: "clan",
-        title: "Тёмный рейс",
-        desc: `Доставьте ящик «неучтёнки» (${qty} ед. «${goodName(g.id)}») своим на ${dest.name}, не задерживаясь в доке. Трюм не занимает.`,
-        reward: jit(780 + qty * 90), timeLimit: CONTRACTS.TIME_TRANSPORT,
-        need: 1, goodId: g.id, qty, destId: dest.id, destName: dest.name,
-      });
-    }
-  }
+  private completeContract(reason: string): void { missions.completeContract(this, reason); }
 
-  acceptContract(id: number): void {
-    if (this.sm.state !== "docked" || this.contract) return;
-    const off = this.offers.find((o) => o.id === id);
-    if (!off) return;
-    this.offers = this.offers.filter((o) => o.id !== id);
-    const c: ActiveContract = { ...off, timeLeft: off.timeLimit, done: 0, escortIdx: -1 };
-    if (off.kind === "escort") {
-      const here = this.dockTarget;
-      const destIdx = this.dockables.findIndex((d) => d.id === off.destId);
-      if (here && destIdx >= 0) {
-        const idx = this.spawnShip("trader", here.x + 240, here.y + 140);
-        if (idx >= 0) {
-          const s = this.ships[idx];
-          s.routeFrom = this.dockables.indexOf(here);
-          s.routeTo = destIdx;
-          s.tx = this.dockables[destIdx].x; s.ty = this.dockables[destIdx].y;
-          s.escortId = off.id;
-          c.escortIdx = idx;
-        }
-      }
-    }
-    this.contract = c;
-    this.audio.sfx("trade");
-    this.setNews(`Контракт принят: ${off.title}. Награда ₡${off.reward.toLocaleString("ru-RU")}.`);
-    this.pushStation();
-    this.pushHud();
-  }
+  private failContract(reason: string): void { missions.failContract(this, reason); }
 
-  cancelContract(): void {
-    if (!this.contract) return;
-    const ei = this.contract.escortIdx;
-    if (ei >= 0 && this.ships[ei].active && this.ships[ei].escortId === this.contract.id) {
-      this.ships[ei].escortId = -1; // the escorted trader goes back to its own routes
-    }
-    this.contract = null;
-    this.setNews("Контракт отменён.");
-    if (this.sm.state === "docked" && this.dockTarget) this.genOffers(this.dockTarget);
-    this.pushStation();
-    this.pushHud();
-  }
+  private spawnConvoyEvent(): void { missions.spawnConvoyEvent(this); }
 
-  private completeContract(reason: string): void {
-    const c = this.contract;
-    if (!c) return;
-    this.contract = null;
-    const clanJob = c.funder === "clan";
-    // the funder's treasury pays: Alliance brokers dip into Alliance capital, clan jobs into the clans' fund
-    const paid = this.gain(c.reward, clanJob ? "clan" : "alliance");
-    this.player.earned += paid;
-    // the two ledgers of law: Alliance board feeds patrol/trader, the clan board feeds clans
-    // at the price of the other two (kinds never mix across boards, hence the casts)
-    this.addRep(clanJob
-      ? PIRATE_BRANCH.CONTRACT_REP[c.kind as keyof typeof PIRATE_BRANCH.CONTRACT_REP]
-      : CONTRACTS.REP[c.kind as keyof typeof CONTRACTS.REP]);
-    this.audio.sfx("credits");
-    this.setNews(`Контракт выполнен: ${c.title} — ${reason}. +₡${paid.toLocaleString("ru-RU")}`);
-    if (this.sm.state === "docked" && this.dockTarget) this.genOffers(this.dockTarget);
-    this.pushStation();
-    this.pushHud();
-    this.saveNow();
-  }
+  private endConvoy(win: boolean, reason: string, plundered = false): void { missions.endConvoy(this, win, reason, plundered); }
 
-  private failContract(reason: string): void {
-    const c = this.contract;
-    if (!c) return;
-    const ei = c.escortIdx;
-    if (ei >= 0 && this.ships[ei].active) this.ships[ei].escortId = -1;
-    this.contract = null;
-    if (c.funder === "clan") this.addRep(PIRATE_BRANCH.CONTRACT_FAIL_REP); // clans remember dropped work
-    this.setNews(`Контракт провален: ${reason}.`);
-    this.pushStation();
-    this.pushHud();
-  }
-
-  private spawnConvoyEvent(): void {
-    const di = Math.floor(this.rnd() * this.dockables.length);
-    const d = this.dockables[di];
-    const id = ++this.raidSeq;
-    const trader = this.spawnShip("trader", d.x + 160, d.y + 120);
-    if (trader < 0) { this.convoyT = 25; return; } // pool full — retry soon
-    this.ships[trader].raidId = id;
-    this.ships[trader].routeFrom = di;
-    this.pickTraderRoute(trader);
-    for (let k = 0; k < CONVOY.RAIDERS; k++) {
-      const a = this.rnd() * Math.PI * 2;
-      const p = this.spawnShip("pirate", d.x + Math.cos(a) * 620, d.y + Math.sin(a) * 620);
-      if (p >= 0) this.ships[p].raidId = id;
-    }
-    this.convoy = { id, t: CONVOY.WINDOW, done: 0, traderIdx: trader };
-    this.setNews(`ПЕРЕХВАТ: пираты атакуют конвой у ${d.name}! Сбейте ${CONVOY.NEED} рейдеров за ${Math.round(CONVOY.WINDOW)} с.`);
-    this.audio.sfx("alarm");
-  }
-
-  private endConvoy(win: boolean, reason: string, plundered = false): void {
-    if (!this.convoy) return;
-    const id = this.convoy.id;
-    this.convoy = null;
-    for (const s of this.ships) if (s.active && s.raidId === id) s.raidId = -1; // survivors go back to ordinary piracy
-    if (win) {
-      const paid = this.gain(CONVOY.REWARD, "alliance");
-      this.player.earned += paid;
-      this.addRep(CONVOY.REP);
-      this.audio.sfx("credits");
-      this.setNews(`${reason} Торговый альянс платит ₡${paid}.`);
-    } else if (plundered) {
-      // a successful clan raid (5c): the captured freight tops up the clan fund, paid by the Alliance
-      const loot = Math.max(0, Math.min(PIRATE_ECON.RAID_PLUNDER, Math.round(this.pools.alliance)));
-      this.pools.alliance -= loot;
-      this.pools.clan += loot;
-      this.setNews(`${reason} Добыча кланов: ₡${loot.toLocaleString("ru-RU")} — фонд пополнен.`);
-    } else {
-      this.setNews(reason);
-    }
-    this.pushHud();
-  }
-
-  private updateContracts(dt: number): void {
-    if (this.contract) {
-      this.contract.timeLeft -= dt;
-      if (this.contract.timeLeft <= 0) this.failContract("время вышло");
-    }
-    if (this.convoy) {
-      this.convoy.t -= dt;
-      if (this.convoy.t <= 0) this.endConvoy(false, "Рейдеры растворились в поясе астероидов — конвой спасён, но награды не будет.");
-    } else {
-      this.convoyT -= dt;
-      if (this.convoyT <= 0) {
-        this.convoyT = CONVOY.PERIOD_MIN + this.rnd() * (CONVOY.PERIOD_MAX - CONVOY.PERIOD_MIN);
-        this.spawnConvoyEvent();
-      }
-    }
-  }
+  private updateContracts(dt: number): void { missions.updateContracts(this, dt); }
 
   /** HUD one-liner for the active contract / raid, with distance to the objective. */
-  private missionLine(): string | null {
-    const fmtT = (sec: number) => {
-      const s = Math.max(0, Math.ceil(sec));
-      return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-    };
-    let base: string | null = null;
-    if (this.contract) {
-      const c = this.contract;
-      base = c.kind === "hunt"
-        ? `КОНТРАКТ · Охота ${c.done}/${c.need} · ${fmtT(c.timeLeft)}`
-        : c.kind === "bounty"
-          ? `КОНТРАКТ · Головы ${c.done}/${c.need} · ${fmtT(c.timeLeft)}`
-          : `КОНТРАКТ · ${c.kind === "transport" ? "Доставка" : "Эскорт"} → ${c.destName} · ${fmtT(c.timeLeft)}`;
-    } else if (this.raid && this.raid.timeLeft > 0) {
-      const r = this.raid;
-      base = `НАЛЁТ · ${this.systemName(r.targetId)} · складов ${r.grabbed.length} · ${fmtT(r.timeLeft)}`;
-      if (this.grabTarget) base += ` · выгрузка ${Math.min(100, Math.floor((this.grabT / RAID.GRAB_TIME) * 100))}%`;
-    } else if (this.convoy) {
-      base = `ТРЕВОГА · Конвой: рейдеры ${this.convoy.done}/${CONVOY.NEED} · ${fmtT(this.convoy.t)}`;
-    }
-    if (!base) return null;
-    const obj = this.objectivePos();
-    if (obj) {
-      const p = this.ships[0];
-      const dist = Math.hypot(obj.x - p.x, obj.y - p.y);
-      base += ` · ${(dist / 1000).toFixed(1)}k`;
-    }
-    return base;
-  }
+  private missionLine(): string | null { return missions.missionLine(this); }
 
   /** Where the mini-radar should point: contract target or the nearest live raider. */
-  private objectivePos(): { x: number; y: number; c: string } | null {
-    const p = this.ships[0];
-    if (this.contract) {
-      const c = this.contract;
-      // hunt chases pirates, clan bounty chases patrols — same nearest-prey scan (6b)
-      if (c.kind === "hunt" || c.kind === "bounty") {
-        const prey: Faction = c.kind === "hunt" ? "pirate" : "patrol";
-        let best: Ship | null = null, bd = Infinity;
-        for (let i = 1; i < MAX_SHIPS; i++) {
-          const s = this.ships[i];
-          if (!s.active || s.faction !== prey) continue;
-          const dd = Math.hypot(s.x - p.x, s.y - p.y);
-          if (dd < bd) { bd = dd; best = s; }
-        }
-        return best ? { x: best.x, y: best.y, c: "#ff5a4a" } : null;
-      }
-      if (c.kind === "escort") {
-        const s = c.escortIdx >= 0 ? this.ships[c.escortIdx] : null;
-        if (s && s.active) return { x: s.x, y: s.y, c: "#ffb347" };
-      }
-      const d = this.dockables.find((dd) => dd.id === c.destId);
-      return d ? { x: d.x, y: d.y, c: "#ffb347" } : null;
-    }
-    if (this.convoy) {
-      let best: Ship | null = null, bd = Infinity;
-      for (let i = 1; i < MAX_SHIPS; i++) {
-        const s = this.ships[i];
-        if (!s.active || s.faction !== "pirate" || s.raidId !== this.convoy.id) continue;
-        const tough = s.hp + s.shield;
-        if (tough < bd) { bd = tough; best = s; }
-      }
-      return best ? { x: best.x, y: best.y, c: "#ff5a4a" } : null;
-    }
-    // raid op: point at the nearest full storehouse here, or at the gate leading to the target (5d)
-    if (this.raid && this.raid.timeLeft > 0) {
-      const r = this.raid;
-      if (this.systemDef.id === r.targetId) {
-        let best: Dockable | null = null, bd = Infinity;
-        for (const d of this.dockables) {
-          if (!d.isStation || r.grabbed.includes(d.id)) continue;
-          const dd = Math.hypot(d.x - p.x, d.y - p.y);
-          if (dd < bd) { bd = dd; best = d; }
-        }
-        return best ? { x: best.x, y: best.y, c: "#ff9a3a" } : null;
-      }
-      const g = this.gates.find((gg) => gg.to === r.targetId);
-      return g ? { x: g.x, y: g.y, c: "#ff9a3a" } : null;
-    }
-    return null;
-  }
+  objectivePos(): { x: number; y: number; c: string } | null { return missions.objectivePos(this); }
 
   /* ================================================================== */
   /* Update loop (fixed 60Hz)                                            */
@@ -2378,141 +2105,28 @@ export class Game {
   /* ================================================================== */
 
   /** True while the player's raid window is open over the system they are standing in. */
-  private raidHot(): boolean {
-    return !!(this.raid && this.raid.timeLeft > 0 && this.raid.targetId === this.systemDef.id);
-  }
+  private raidHot(): boolean { return missions.raidHot(this); }
 
   /**
    * Launch a raid on a free system from the galaxy map (5d). Occupied systems
    * hold nothing worth taking; the desk is busy while a window or cooldown runs.
    */
-  startRaid(systemId: string): void {
-    if (this.sm.state !== "playing" || !this.ships[0].active) return;
-    if (this.raid) {
-      this.audio.sfx("alarm");
-      this.setNews(this.raid.timeLeft > 0
-        ? "Оперштаб занят: окно налёта ещё открыто."
-        : "Оперштаб остывает — следующая операция будет нескоро.");
-      return;
-    }
-    const def = SYSTEMS.find((s) => s.id === systemId);
-    if (!def) return;
-    if (this.occ.held && this.occ.systemId === systemId) {
-      this.audio.sfx("alarm");
-      this.setNews("Налёт на оккупированную систему — даром: там и так всё общее.");
-      return;
-    }
-    this.raid = { targetId: systemId, timeLeft: RAID.WINDOW, cooldown: 0, grabbed: [], taken: 0 };
-    this.grabTarget = null; this.grabT = 0;
-    const here = systemId === this.systemDef.id;
-    if (here) this.spawnRaidGuards();
-    this.audio.sfx("alarm");
-    this.setNews(`⚔ НАЛЁТ НА ${def.name.toUpperCase()}: ${Math.round(RAID.WINDOW / 60)} мин, чтобы опустошить склады станций (${RAID.GRAB_TIME} с у причала). ${here ? "Вы уже здесь — охрана поднимается по тревоге!" : "Прыгайте в врата — окно уже идёт."}`);
-    this.pushHud();
-    if (this.mapOpen) this.pushMap();
-    this.saveNow();
-  }
+  startRaid(systemId: string): void { missions.startRaid(this, systemId); }
 
   /** Patrol cordon thrown up around every station of the target while the window is open. */
-  private spawnRaidGuards(): void {
-    for (const d of this.dockables) {
-      if (!d.isStation) continue;
-      for (let k = 0; k < RAID.GUARDS_PER_STATION; k++) {
-        const idx = this.spawnShip("patrol", d.x + (this.rnd() - 0.5) * 1400, d.y + (this.rnd() - 0.5) * 1400);
-        if (idx >= 0) this.ships[idx].raidGuard = true;
-      }
-    }
-  }
+  private spawnRaidGuards(): void { missions.spawnRaidGuards(this); }
 
   /** Window timer, storehouse hovering, cooldown. Contract/convoy logic is untouched by jumps — the op is galaxy-wide. */
-  private updateRaid(dt: number): void {
-    const r = this.raid;
-    if (!r) return;
-    if (r.timeLeft <= 0) {
-      r.cooldown -= dt;
-      if (r.cooldown <= 0) this.raid = null; // the ops desk is clear — the map lights the button up again
-      return;
-    }
-    r.timeLeft -= dt;
-    if (this.sm.state === "playing" && this.systemDef.id === r.targetId) {
-      const p = this.ships[0];
-      const spd = Math.hypot(p.vx, p.vy);
-      const near = spd < WORLD_CFG.DOCK_MAX_SPEED ? findDockTarget(this.dockables, p.x, p.y) : null;
-      const d = near && near.isStation && !r.grabbed.includes(near.id) ? near : null;
-      if (d) {
-        if (this.grabTarget !== d.id) { this.grabTarget = d.id; this.grabT = 0; }
-        this.grabT += dt;
-        if (this.grabT >= RAID.GRAB_TIME) this.grabStorehouse(d);
-      } else {
-        this.grabTarget = null; this.grabT = 0;
-      }
-    } else {
-      this.grabTarget = null; this.grabT = 0;
-    }
-    if (r.timeLeft <= 0) this.endRaid();
-  }
+  private updateRaid(dt: number): void { missions.updateRaid(this, dt); }
 
   /** Empty one storehouse: three treasuries pay at once — strongbox, customs payroll, caravan funds. */
-  private grabStorehouse(d: Dockable): void {
-    const r = this.raid;
-    if (!r) return;
-    const def = SYSTEMS.find((s) => s.id === r.targetId) ?? this.systemDef;
-    const pl = def.priceLevel; // trophies ∝ the target's market wealth
-    let total = 0;
-    total += this.gain(Math.max(RAID.LOOT_MIN.stations, RAID.LOOT.stations * Math.max(0, this.pools.stations)) * pl, "stations");
-    total += this.gain(Math.max(RAID.LOOT_MIN.patrol, RAID.LOOT.patrol * Math.max(0, this.pools.patrol)) * pl, "patrol");
-    total += this.gain(Math.max(RAID.LOOT_MIN.alliance, RAID.LOOT.alliance * Math.max(0, this.pools.alliance)) * pl, "alliance");
-    r.grabbed.push(d.id);
-    r.taken += total;
-    this.player.earned += total;
-    this.grabTarget = null; this.grabT = 0;
-    // the clans applaud every sagging Alliance warehouse (Этап 6)
-    this.addRep(PIRATE_BRANCH.REP_RAID_GRAB);
-    // embargo: the raids spook trade — every market in the system sags
-    for (const dd of this.dockables) for (const g of GOODS) this.pushFluct(dd, g.id, -RAID.EMBARGO_PUSH);
-    if (r.grabbed.length === 1) {
-      this.addRep(RAID.REP_HIT);
-      this.player.outlaw = true; // open piracy: patrol shoots on sight until pardoned or fined
-      this.audio.sfx("alarm");
-      this.syncPirateStatus(); // 5f: the first grab makes you formal kin of the clans
-      this.setNews(`⚔ Склад ${d.name} опустошен: +₡${total.toLocaleString("ru-RU")}. Патруль объявил вас пиратом — с этого момента вас ищут!`);
-    } else {
-      this.audio.sfx("credits");
-      this.setNews(`⚔ Склад ${d.name} опустошен: +₡${total.toLocaleString("ru-RU")}.`);
-    }
-    this.floater(d.x, d.y - d.radius - 40, `+₡${Math.round(total).toLocaleString("ru-RU")}`, "#ff9a3c", true);
-    this.pushHud();
-    this.saveNow();
-  }
+  private grabStorehouse(d: Dockable): void { missions.grabStorehouse(this, d); }
 
   /** The window closed: escorts stand down, the operation desk cools off. */
-  private endRaid(reason?: string): void {
-    const r = this.raid;
-    if (!r) return;
-    for (let i = 1; i < MAX_SHIPS; i++) {
-      const s = this.ships[i];
-      if (s.active && s.raidGuard) this.freeShip(i);
-    }
-    this.grabTarget = null; this.grabT = 0;
-    this.raid = { targetId: r.targetId, timeLeft: 0, cooldown: RAID.COOLDOWN, grabbed: r.grabbed, taken: r.taken };
-    this.setNews(reason
-      ?? (r.grabbed.length
-        ? `Операция завершена: складов ${r.grabbed.length}, добыча ₡${Math.round(r.taken).toLocaleString("ru-RU")}. Оперштаб остывает ${Math.round(RAID.COOLDOWN / 60)} мин.`
-        : "Окно налёта закрыто — склады целы. Оперштаб остывает."));
-    this.saveNow();
-    this.pushHud();
-    if (this.mapOpen) this.pushMap();
-  }
+  private endRaid(reason?: string): void { missions.endRaid(this, reason); }
 
   /** Rough per-storehouse take in a system — the map's raid forecast (5d). */
-  private raidEstFor(def: SystemDef): number {
-    return Math.round(
-      (Math.max(RAID.LOOT_MIN.stations, RAID.LOOT.stations * Math.max(0, this.pools.stations))
-        + Math.max(RAID.LOOT_MIN.patrol, RAID.LOOT.patrol * Math.max(0, this.pools.patrol))
-        + Math.max(RAID.LOOT_MIN.alliance, RAID.LOOT.alliance * Math.max(0, this.pools.alliance)))
-      * def.priceLevel,
-    );
-  }
+  private raidEstFor(def: SystemDef): number { return missions.raidEstFor(this, def); }
 
   /** Aim angle: mouse cursor on desktop; auto-target nearest hostile on touch. */
   private aimAngle(): number | null {
@@ -3460,7 +3074,7 @@ export class Game {
     uiBridge.set({ hud, radio: this.radioData(), feed: this.feedView() });
   }
 
-  private pushStation(): void {
+  pushStation(): void {
     const d = this.dockTarget;
     if (!d) return;
     const p = this.ships[0];
@@ -3543,7 +3157,7 @@ export class Game {
   }
 
   /** Snapshot for the chart overlay; pushed while the chart is open (~8 Hz). */
-  private pushMap(): void {
+  pushMap(): void {
     const HALF = WORLD_CFG.HALF;
     const obj = this.objectivePos();
     const map: MapSnapshot = {

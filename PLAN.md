@@ -331,6 +331,13 @@
   repairCost, чистая часть setShip (setShipFit), fleetSnapshot целиком. Чистые функции
   от PlayerState + FleetCtx; звук/новости/сейв остались в обёртках Game.
   game.ts: 4073 → 3946 строк. Регрессия 7/7 зелёная.
+  **Спил 3/4 ✅ 2026-11-19: `missions.ts` (502 строки)** — доски контрактов Альянса
+  и кланов (genOffers/genClanOffers/accept/cancel/complete/fail), конвойные тревоги,
+  рейдовые операции (startRaid/гварды/грабёж складов/endRaid/прогноз), missionLine и
+  objectivePos для HUD/радара. Контекст MissionsCtx (~30 членов) — опубликованы
+  состояние (contract/offers/convoy/raid/occ/sm/rnd…) и сервисы (spawnShip/setNews/
+  addRep/push*). Деньги идут через economy.ts. game.ts: 3946 → 3560 строк.
+  Регрессия 7/7 зелёная.
 - [ ] **9b. Дебаг-мосты только в dev.** `__sim`/`__perf`/`__econAudit`/`__input` сейчас открыты
   в прод-сборке — завернуть в `import.meta.env.DEV`, тестам дать флаг сборки.
 - [ ] **9c. Экспорт/импорт сейва.** Сейв только в localStorage: очистка браузера = потеря игры.
