@@ -12,6 +12,7 @@ import {
 } from "./config";
 import type { EquipCat, EquipItem, HullDef, HullId, YardTier } from "./config";
 import { AudioSystem } from "./audio";
+import * as econ from "./economy";
 import { GameLoop } from "./engine";
 import { Input } from "./input";
 import { perf } from "./perf";
@@ -108,7 +109,7 @@ export class Game {
   private ctx: CanvasRenderingContext2D;
   private loop: GameLoop;
   private input: Input;
-  private audio = new AudioSystem();
+  audio = new AudioSystem(); // public: экономика (economy.ts) играет звуки сделок
   private sm = new GameStateMachine();
   private disposed = false;
 
@@ -122,7 +123,7 @@ export class Game {
   /* world */
   private seed = 1;
   private rnd = mulberry32(1);
-  private dockables: Dockable[] = [];
+  dockables: Dockable[] = []; // public: economy.ts торгует с рынков доков
   private dockTex: HTMLCanvasElement[] = [];
   private starTex: HTMLCanvasElement;
   private dockSpin: number[] = [];
@@ -132,7 +133,7 @@ export class Game {
   private worldGen = 0;
 
   /* entities */
-  private ships: Ship[] = [];
+  ships: Ship[] = []; // public: economy.ts считает float кошельков
   private shipTexMap: Record<string, HTMLCanvasElement[]>;
   private bolts: Bolt[] = [];
   private boltTexPlayer: HTMLCanvasElement;
@@ -168,7 +169,7 @@ export class Game {
   private goodWindows = 0;
 
   /* player */
-  private player: PlayerState = Game.freshPlayerState();
+  player: PlayerState = Game.freshPlayerState(); // public: economy.ts платит в кредиты
 
   /* timers */
   private econT = ECONOMY.TICK;
@@ -179,7 +180,7 @@ export class Game {
   private alarmT = 0;
   private damageFlash = 0;
 
-  private dockTarget: Dockable | null = null;
+  dockTarget: Dockable | null = null; // public: economy.ts выбирает кассу сделки
   private bossIdx = -1;
   private bossEscortsSpawned = false;
   private bgGradient: CanvasGradient | null = null;
@@ -223,7 +224,7 @@ export class Game {
   /** Static per-system schematics for the chart (seeded, computed once). */
   private layoutCache = new Map<string, Dockable[]>();
   /** Closed money circulation (Этап 5a): Σ pools + player.credits === MONEY_TOTAL at all times. */
-  private pools: MoneyPools = { ...POOLS };
+  pools: MoneyPools = { ...POOLS }; // public: казны — ядро economy.ts
 
   private static freshPlayerState(): PlayerState {
     return {
@@ -396,7 +397,7 @@ export class Game {
    * are respawned, and a pursuing boss follows the player through.
    */
   /** True while the clans hold the system the player is standing in. */
-  private hereOccupied(): boolean {
+  hereOccupied(): boolean {
     return this.occ.held && this.occ.systemId === this.systemDef.id;
   }
 
@@ -542,8 +543,7 @@ export class Game {
 
   /** Trader trade volume nudges the local price toward equilibrium (Этап 5b). */
   private pushFluct(d: Dockable, goodId: string, delta: number): void {
-    const cur = d.fluct[goodId] ?? 1;
-    d.fluct[goodId] = Math.min(ECONOMY.FLUCT_MAX, Math.max(ECONOMY.FLUCT_MIN, cur + delta));
+    econ.pushFluct(d, goodId, delta);
   }
 
   /**
@@ -649,95 +649,25 @@ export class Game {
   }
 
   /** Closest caravan on the radio band, -1 = none in range (Этап 5b). */
+  /** Ближайший караван на связи; -1 — эфир пуст (тело в economy.ts, Этап 9a). */
   private radioIdx(): number {
     if (this.sm.state !== "playing") return -1;
-    const p = this.ships[0];
-    let best = -1, bestD: number = TRADER_AI.RADIO_RANGE;
-    for (let i = 1; i < MAX_SHIPS; i++) {
-      const s = this.ships[i];
-      if (!s.active || s.faction !== "trader") continue;
-      if (s.smuggler) continue; // clan haulers don't hail the Alliance band (Этап 8)
-      const dd = Math.hypot(s.x - p.x, s.y - p.y) - s.radius;
-      if (dd <= bestD) { bestD = dd; best = i; }
-    }
-    return best;
+    return econ.radioIdx(this);
   }
 
   /** Radio offer: the caravan quotes against the market it last left (Этап 5b). */
   radioData(): RadioSnapshot | null {
-    const i = this.radioIdx();
-    if (i < 0) return null;
-    const s = this.ships[i];
-    const home = this.dockables[Math.min(Math.max(s.routeFrom, 0), this.dockables.length - 1)];
-    const sells: RadioSnapshot["sells"] = [];
-    const buys: RadioSnapshot["buys"] = [];
-    const room = TRADER_AI.HOLD - this.traderLoad(s);
-    for (const g of GOODS) {
-      const base = priceOf(home, g.id);
-      const q = Math.round(s.cargo[g.id] ?? 0);
-      if (q > 0) {
-        const unit = Math.max(1, Math.round(base * TRADER_AI.RADIO_SELL));
-        sells.push({ goodId: g.id, name: g.name, qty: q, unit });
-      }
-      const have = this.player.cargo[g.id] ?? 0;
-      if (have > 0 && room > 0) {
-        const unit = Math.max(1, Math.round(base * TRADER_AI.RADIO_BUY));
-        const maxQty = Math.min(have, room, Math.floor(Math.max(0, s.wallet) / unit));
-        if (maxQty > 0) buys.push({ goodId: g.id, name: g.name, unit, maxQty });
-      }
-    }
-    return { shipIdx: i, name: s.name || "Караван", sells, buys, wallet: Math.round(s.wallet), holdFree: Math.max(0, room) };
+    return econ.radioData(this);
   }
 
   /** Radio purchase: credits go straight into the caravan's pocket — pools untouched (5b). */
   radioBuy(shipIdx: number, goodId: string, qty: number): boolean {
-    const s = this.ships[shipIdx];
-    if (!s.active || s.faction !== "trader") return false;
-    const home = this.dockables[Math.min(Math.max(s.routeFrom, 0), this.dockables.length - 1)];
-    const unit = Math.max(1, Math.round(priceOf(home, goodId) * TRADER_AI.RADIO_SELL));
-    const n = Math.max(0, Math.min(
-      Math.floor(qty),
-      Math.round(s.cargo[goodId] ?? 0),
-      this.cargoMax() - this.cargoUsed(),
-      Math.floor(this.player.credits / unit),
-    ));
-    if (n <= 0) return false;
-    this.player.credits -= n * unit;
-    s.wallet += n * unit;
-    s.cargo[goodId] = Math.round((s.cargo[goodId] ?? 0) - n);
-    if (s.cargo[goodId] <= 0) delete s.cargo[goodId];
-    this.player.cargo[goodId] = (this.player.cargo[goodId] ?? 0) + n;
-    this.player.traded += 1;
-    this.floater(s.x, s.y, `−₡${n * unit}`, "#9fb6c6");
-    this.audio.sfx("trade");
-    this.pushHud();
-    return true;
+    return econ.radioBuy(this, shipIdx, goodId, qty);
   }
 
   /** Radio sale: the caravan pays from its wallet and stows the goods in its hold (5b). */
   radioSell(shipIdx: number, goodId: string, qty: number): boolean {
-    const s = this.ships[shipIdx];
-    if (!s.active || s.faction !== "trader") return false;
-    const home = this.dockables[Math.min(Math.max(s.routeFrom, 0), this.dockables.length - 1)];
-    const unit = Math.max(1, Math.round(priceOf(home, goodId) * TRADER_AI.RADIO_BUY));
-    const n = Math.max(0, Math.min(
-      Math.floor(qty),
-      this.player.cargo[goodId] ?? 0,
-      TRADER_AI.HOLD - this.traderLoad(s),
-      Math.floor(Math.max(0, s.wallet) / unit),
-    ));
-    if (n <= 0) return false;
-    s.wallet -= n * unit;
-    this.player.credits += n * unit;
-    this.player.earned += n * unit;
-    this.player.cargo[goodId] = (this.player.cargo[goodId] ?? 0) - n;
-    if (this.player.cargo[goodId] <= 0) delete this.player.cargo[goodId];
-    s.cargo[goodId] = (s.cargo[goodId] ?? 0) + n;
-    this.player.traded += 1;
-    this.floater(s.x, s.y, `+₡${n * unit}`, "#ffd24a");
-    this.audio.sfx("trade");
-    this.pushHud();
-    return true;
+    return econ.radioSell(this, shipIdx, goodId, qty);
   }
 
   private spawnAtEdge(faction: Faction): void {
@@ -1188,7 +1118,7 @@ export class Game {
     return best;
   }
 
-  private cargoMax(): number { return this.hullDef().cargo; }
+  cargoMax(): number { return this.hullDef().cargo; }
   private maxHull(): number { return this.hullDef().hp; }
   private maxShield(): number {
     let s = this.hullDef().shieldPlate;
@@ -1212,7 +1142,7 @@ export class Game {
     return r;
   }
 
-  private cargoUsed(): number {
+  cargoUsed(): number {
     let n = 0;
     for (const g of GOODS) n += this.player.cargo[g.id] ?? 0;
     return n;
@@ -1451,54 +1381,28 @@ export class Game {
    * Pay the player out of a treasury (clamped to what it holds — the galaxy's money
    * is fixed, nobody prints credits). Returns the amount actually paid.
    */
-  private gain(n: number, pool: PoolId): number {
-    const paid = Math.max(0, Math.min(Math.round(n), Math.round(this.pools[pool])));
-    this.pools[pool] -= paid;
-    this.player.credits += paid;
-    return paid;
-  }
+  /* ---- Денежный контур (Этап 9a): тела живут в economy.ts, тут — обёртки ---- */
+
+  private gain(n: number, pool: PoolId): number { return econ.gain(this, n, pool); }
 
   /** Spend player credits into a treasury — the mirror of gain(). */
-  private pay(n: number, pool: PoolId): void {
-    const spent = Math.round(n);
-    this.player.credits -= spent;
-    this.pools[pool] += spent;
-  }
+  private pay(n: number, pool: PoolId): void { econ.pay(this, n, pool); }
 
   /** Treasury a docked trade runs through: smuggler cash on clan turf, civilian capital elsewhere. */
-  private tradePool(): PoolId {
-    return this.dockTarget && (this.hereOccupied() || this.dockTarget.id === PIRATE_BRANCH.LAIR.id) ? "clan" : "stations";
-  }
+  private tradePool(): PoolId { return econ.tradePool(this); }
 
   /** Player's share of the galaxy's fixed credit mass (0..1) — the economic victory meter. */
-  sharePct(): number {
-    return this.player.credits / MONEY_TOTAL;
-  }
+  sharePct(): number { return econ.sharePct(this); }
 
-  /**
-   * Credits sitting in traders' wallets (Этап 5b). This is Alliance money on loan:
-   * drawn from pools.alliance at spawn, returned at freeShip, pocketed by the player on a kill.
-   * Clan haulers (Этап 8) are excluded — their stake is clan money, see smugglerFloat().
-   */
-  private traderFloat(): number {
-    let f = 0;
-    for (const s of this.ships) if (s.active && s.faction === "trader" && !s.smuggler) f += Math.round(s.wallet);
-    return f;
-  }
+  /** Alliance money on loan in caravan wallets (Этап 5b); clan haulers excluded (Этап 8). */
+  private traderFloat(): number { return econ.traderFloat(this); }
 
   /** Clan hauler wallets in flight (Этап 8): clan money on loan, returned at freeShip. */
-  private smugglerFloat(): number {
-    let f = 0;
-    for (const s of this.ships) if (s.active && s.faction === "trader" && s.smuggler) f += Math.round(s.wallet);
-    return f;
-  }
+  private smugglerFloat(): number { return econ.smugglerFloat(this); }
 
   /** Debug/QA: the closed-circulation invariant. delta must stay 0 — see the balance autotest. */
   econAudit(): { total: number; player: number; pools: MoneyPools; traderFloat: number; delta: number } {
-    const sum = this.pools.patrol + this.pools.alliance + this.pools.clan + this.pools.stations;
-    const float = this.traderFloat() + this.smugglerFloat();
-    const player = Math.round(this.player.credits);
-    return { total: MONEY_TOTAL, player, pools: { ...this.pools }, traderFloat: float, delta: sum + float + player - MONEY_TOTAL };
+    return econ.econAudit(this);
   }
 
   private endStats(victory: boolean, reason: string): EndStats {
@@ -1612,14 +1516,7 @@ export class Game {
    * and sell at 1.2; cold standing flattens the black-market bonus to a rounding.
    */
   private priceMods(): { buy: number; sell: number } {
-    const tm = this.tradeMod();
-    if (this.dockTarget && (this.hereOccupied() || this.dockTarget.id === PIRATE_BRANCH.LAIR.id)) {
-      const b = this.player.rep.clan >= REP.FRIENDLY ? PIRATE_BRANCH.BLACK_FRIEND
-        : this.player.rep.clan <= REP.UNFRIENDLY ? PIRATE_BRANCH.BLACK_COLD
-        : OCCUPATION.BLACK;
-      return { buy: tm.buy * b.buy, sell: tm.sell * b.sell };
-    }
-    return tm;
+    return econ.priceMods(this);
   }
 
   buy(goodId: string, qty: number): void {
@@ -1957,9 +1854,7 @@ export class Game {
 
   /** Alliance standing bends prices: allies discount, enemies gouge. */
   private tradeMod(): { buy: number; sell: number } {
-    if (this.player.rep.trader >= REP.FRIENDLY) return REP.PRICE_FRIENDLY;
-    if (this.player.rep.trader <= REP.UNFRIENDLY) return REP.PRICE_UNFRIENDLY;
-    return { buy: 1, sell: 1 };
+    return econ.tradeMod(this);
   }
 
   /** One offer of each kind per docking; the broker restocks every undock. */
@@ -3179,7 +3074,7 @@ export class Game {
   }
 
   /** Spawn a rising text popup at world coords (game feel) — capped so a haul can't flood the screen. */
-  private floater(x: number, y: number, text: string, c: string, big = false): void {
+  floater(x: number, y: number, text: string, c: string, big = false): void {
     if (this.floaters.length >= 40) this.floaters.shift();
     this.floaters.push({ x, y, t: 0, ttl: big ? 2.4 : 1.5, text, c, big });
   }
@@ -3603,7 +3498,7 @@ export class Game {
     });
   }
 
-  private pushHud(): void {
+  pushHud(): void {
     const p = this.ships[0];
     const boss = this.bossIdx >= 0 ? this.ships[this.bossIdx] : null;
     // a course to an orbiting body rides its orbit — snap the marker to the target
