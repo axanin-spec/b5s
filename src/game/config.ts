@@ -205,8 +205,10 @@ export const RAID = {
   LOOT: { stations: 0.013, patrol: 0.009, alliance: 0.0046 },
   /** Floors so even a bled-dry galaxy pays a little for the risk. */
   LOOT_MIN: { stations: 700, patrol: 350, alliance: 250 },
-  /** Standing cost of hitting a civilian system; the first take also brands the player outlaw. */
-  REP_HIT: { patrol: -12, trader: -10 },
+  /** Standing cost of hitting a civilian system; the first take also brands the player outlaw.
+   *  10b: разбой должен стоить репутации — окно налёта с 3–4 складами уводит Патруль за черту
+   *  вражды (−35), а Альянс — к порогу недолюбливания: рынки закрываются по-настоящему. */
+  REP_HIT: { patrol: -26, trader: -20 },
   /** Patrol escorts thrown up around every station of the target while the window is open. */
   GUARDS_PER_STATION: 2,
   /** Each take sags every market price in the system by this fluct push (embargo bites prices). */
@@ -278,7 +280,11 @@ export const TRADER_AI = {
   HOLD: 24,
   /** Working capital range granted from the Alliance fund at spawn (₡). */
   CASH: [6000, 14000] as const,
-  /** Radio deals: the trader sells above and buys below its last market price. */
+  /** Radio deals: the trader sells above and buys below its last market price.
+   *  10c (решение 2026-11-20): сознательная фича контрабандистов — караван торгует по ценам
+   *  своего домашнего рынка, поэтому арбитраж «купить дёшево здесь, продать дорого каравану
+   *  с дорогим рынком» не вставая с точки даёт живую маржу; потолок — кошелёк каравана
+   *  (CASH) и его трюм (HOLD). Не фиксим: радио-бары — жанровое ядро. */
   RADIO_SELL: 1.18,
   RADIO_BUY: 0.68,
   /** Radio offer appears within this distance of the player (world units). */
@@ -375,8 +381,9 @@ export const CONVOY = {
 /* ------------------------------------------------------------------ */
 
 export const PIRATE_BRANCH = {
-  /** Репутация у кланов за каждый опустошенный склад налёта: им приятно топить Альянс. */
-  REP_RAID_GRAB: { clan: 4 },
+  /** Репутация за каждый опустошенный склад налёта: кланам приятно топить Альянс (10b:
+   *  каждый захват одновременно жрёт закон — разграбленный склад помнят и патруль, и брокеры). */
+  REP_RAID_GRAB: { clan: 4, patrol: -6, trader: -5 },
   /** «Свой» на чёрном рынке: clan ≥ FRIENDLY покупает дешевле и продаёт жирнее;
    *  ≤ UNFRIENDLY — с чужака не гонят товар, но и любви нет. */
   BLACK_FRIEND: { buy: 0.82, sell: 1.2 },
