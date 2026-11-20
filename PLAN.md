@@ -427,11 +427,25 @@ three.js только рисует. Canvas2D-рендер остаётся fallb
 world (x, y) → three (x, 0, −z) — совпадает с `__gameProbe {z: −y}` и verify-контрактом
 «W → z уменьшается». three был в проекте до 9d — возвращаем `three` + `@types/three`.
 
-- [ ] **12a. three-скелет.** `gl.ts`: тот же `#game-canvas` (слой ввода не трогать), орто-камера
-  строго сверху с паритетом видимости по `ppu`, сущности — билборды на существующих
-  процедурных текстурах (CanvasTexture). Шов `screenToWorld()` в интерфейсе рендерера
-  (aimAngle переезжает в него). Флоатеры/маркеры — overlay `#fx-canvas` (pointer-events:none).
-  Мост `__gl.enable()` под гейтом BRIDGES; новый зонд `npm run skin`.
+- [x] **12a. three-скелет.** ✅ 2026-11-20. `src/game/gl.ts`: `Renderer3D` на three.js —
+  WebGLRenderer({antialias, alpha, preserveDrawingBuffer:true}), OrthographicCamera строго
+  сверху (`up=(0,0,−1)`: экран = мировой вид без зеркал), окно H/ppu×W/ppu (1 GL-единица =
+  ppu px — паритет видимости с 2D), мир → (x, 0, −z) как в `__gameProbe`. Сущности — пулы
+  `THREE.Sprite` на CanvasTexture из тех же make*-канвасов (кэш WeakMap); повороты
+  пересчитаны из canvas-формул (canvas крутит по часовой, `material.rotation` — против),
+  горизонт врат и частицы на AdditiveBlending. Один канвас = один тип контекста, поэтому
+  вместо `#fx-canvas` слоя три: `#bg-canvas` (2D-фон: градиент/параллакс/орбиты) →
+  `#gl-canvas` (мир) → `#game-canvas` (остался верхним: ВЕСЬ ввод + прозрачный оверлей
+  аннотаций/всплывашек). render.ts разобран на проходы (updateCamera/drawBackground/
+  drawBodies/drawEntities/drawAnnotations/drawOverlay), `renderGlFrame` = фон+GL+оверлей;
+  2D-режим (дефолт) рисует те же проходы на одном канвасе. Шов `screenToWorld()` — метод
+  Game, aimAngle вызывает его (в 12b заменится на raycast только в 3D-ветке). Мост
+  `__gl = {enable, disable, state, s2w, view}` под BRIDGES (в проде `__gl` = 0).
+  Зонд `npm run skin` — 8 флагов (включение/слои DOM/screenToWorld/не чёрный GL-буфер/
+  контракт `__gameProbe`/живая мышь со стрельбой/скриншот skin-play.png/без ошибок);
+  WebGL подтверждён и во вшитом браузере. Регрессия 7/7 зелёная + intel 7/7.
+  Замечание на будущее: three тянется в прод-бандл статическим импортом (~150 КБ raw) —
+  в 12d перевести на dynamic import при включении 3D.
 - [ ] **12b. Перспектива и объём.** Наклонная перспективная камера (≈45°), планеты-сферы,
   станции — кольца/цилиндры, звезда — additive-спрайт + точечный свет, врата — торцы;
   болты → InstancedMesh. Гейт perf: секция рендера < 8 мс (только на реальном GPU).
@@ -457,4 +471,9 @@ npm run build    # прод-сборка
 npm run balance  # экономика-автотест (после build)
 npm run fleet    # автотест флота: верфь/снаряжение/гейты (после build)
 npm run intel    # автотест рыночной разведки (10a): докинг→снимок, сейв v9, v8-совместимость
+npm run smuggle  # автотест клановых контрабандистов (8)
+npm run loot     # автотест трофейных модулей (11a)
+npm run watch    # автотест казны патруля и крейсера «Варта» (11b/11c)
+npm run focus    # автотест мышиного фокуса и карты (6b-хвост)
+npm run skin     # автотест WebGL-«шубы» (12a): три слоя холстов, screenToWorld, живой ввод
 ```

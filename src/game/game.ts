@@ -15,7 +15,8 @@ import { AudioSystem } from "./audio";
 import * as econ from "./economy";
 import * as fleet from "./fleet";
 import * as missions from "./missions";
-import { renderFrame, paletteTex } from "./render";
+import { renderFrame, renderGlFrame, paletteTex } from "./render";
+import { Renderer3D } from "./gl";
 import { GameLoop } from "./engine";
 import { Input } from "./input";
 import { perf } from "./perf";
@@ -174,7 +175,6 @@ export class Game {
   dockTarget: Dockable | null = null; // public: economy.ts выбирает кассу сделки
   private bossIdx = -1;
   private bossEscortsSpawned = false;
-  bgGradient: CanvasGradient | null = null; // public: render.ts
   splashRemoved = false; // public: render.ts
 
   /* star systems + gates */
@@ -473,6 +473,16 @@ export class Game {
     this.ctx.imageSmoothingQuality = "high";
     // adaptive world scale: phones see a slightly wider area so the ship stays readable
     this.ppu = Math.max(0.42, Math.min(1.05, Math.min(w / 1500, h / 950) + 0.32));
+    // 3D-режим (12a): нижний 2D-холст и GL-канвас живут в тех же размерах, что и канвас ввода
+    if (this.gl3d && this.bgCanvas && this.bgCtx) {
+      this.gl3d.resize(w, h, this.ppu, dpr * ss);
+      this.bgCanvas.width = this.canvas.width;
+      this.bgCanvas.height = this.canvas.height;
+      this.bgCanvas.style.width = `${w}px`;
+      this.bgCanvas.style.height = `${h}px`;
+      this.bgCtx.setTransform(dpr * ss, 0, 0, dpr * ss, 0, 0);
+      this.bgCtx.imageSmoothingQuality = "high";
+    }
   }
 
   /* ================================================================== */
@@ -2157,10 +2167,8 @@ export class Game {
       if (best >= 0) return Math.atan2(this.ships[best].y - p.y, this.ships[best].x - p.x);
       return p.angle;
     }
-    const w = window.innerWidth, h = window.innerHeight;
-    const wx = this.camX + (this.input.mouseX - w / 2) / this.ppu;
-    const wy = this.camY - (this.input.mouseY - h / 2) / this.ppu;
-    return Math.atan2(wy - p.y, wx - p.x);
+    const aim = this.screenToWorld(this.input.mouseX, this.input.mouseY);
+    return Math.atan2(aim.y - p.y, aim.x - p.x);
   }
 
   /** Player damage with no attacker (star heat, collisions). */
@@ -2646,7 +2654,79 @@ export class Game {
   camSx = 0; // public: render.ts (экранная камера с тряской)
   camSy = 0; // public: render.ts
 
-  private render(): void { renderFrame(this); }
+  /* ================================================================== */
+  /* Render backends (Этап 12a)                                          */
+  /* ================================================================== */
+
+  /** "2d" — Canvas2D (по умолчанию), "3d" — WebGL-«шуба» three.js под той же симуляцией. */
+  renderMode: "2d" | "3d" = "2d";
+  private gl3d: Renderer3D | null = null;
+  private glCanvas: HTMLCanvasElement | null = null;
+  private bgCanvas: HTMLCanvasElement | null = null;
+  private bgCtx: CanvasRenderingContext2D | null = null;
+
+  private render(): void {
+    if (this.renderMode === "3d" && this.gl3d && this.bgCtx) renderGlFrame(this, this.gl3d, this.bgCtx);
+    else renderFrame(this);
+  }
+
+  /**
+   * Включить WebGL-слой. Под канвас ввода вставляются ещё два холста: нижний — 2D-фон,
+   * средний — GL-мир; весь мышиный ввод остаётся на #game-canvas (он остался верхним).
+   * Возвращает false, если WebGL недоступен (тогда игра продолжает в 2D).
+   */
+  enable3d(): boolean {
+    if (this.renderMode === "3d") return true;
+    if (!this.gl3d) {
+      try {
+        const css = "position:absolute;inset:0;width:100%;height:100%;pointer-events:none";
+        const bg = document.createElement("canvas");
+        bg.id = "bg-canvas";
+        bg.style.cssText = css;
+        const bgCtx = bg.getContext("2d");
+        if (!bgCtx) return false;
+        const glc = document.createElement("canvas");
+        glc.id = "gl-canvas";
+        glc.style.cssText = css;
+        this.bgCanvas = bg;
+        this.bgCtx = bgCtx;
+        this.gl3d = new Renderer3D(glc);
+        this.glCanvas = glc;
+        const parent = this.canvas.parentElement ?? document.body;
+        parent.insertBefore(bg, this.canvas);
+        parent.insertBefore(glc, this.canvas);
+        this.onResize(); // задает размеры обоих новых холстов под текущий dpr/ppu
+      } catch {
+        this.disable3d();
+        return false;
+      }
+    }
+    this.renderMode = "3d";
+    return true;
+  }
+
+  disable3d(): void {
+    this.renderMode = "2d";
+    this.gl3d?.dispose();
+    this.gl3d = null;
+    this.glCanvas?.remove();
+    this.glCanvas = null;
+    this.bgCanvas?.remove();
+    this.bgCanvas = null;
+    this.bgCtx = null;
+  }
+
+  /**
+   * Шов рендер-бэкендов: экранные пиксели (clientX/clientY) → мировые координаты.
+   * Орто-вид сверху у 2D и 3D общий (1 GL-единица = ppu px); в 12b ветка 3D
+   * станет raycast'ом по плоскости, вызовы это не тронут.
+   */
+  screenToWorld(px: number, py: number): { x: number; y: number } {
+    return {
+      x: this.camX + (px - window.innerWidth / 2) / this.ppu,
+      y: this.camY - (py - window.innerHeight / 2) / this.ppu,
+    };
+  }
 
   /* ================================================================== */
   /* UI bridge pushes                                                    */
@@ -3161,6 +3241,17 @@ export class Game {
       shots: this.shotsFired,
       hasFocus: document.hasFocus(),
     });
+    // 12a: WebGL-«шуба» — включение режима, GL-статистика и шов screenToWorld для probes
+    (window as unknown as Record<string, unknown>).__gl = {
+      enable: () => this.enable3d(),
+      disable: () => this.disable3d(),
+      state: () => ({
+        mode: this.renderMode,
+        ...(this.gl3d ? this.gl3d.info() : { sprites: 0, drawCalls: 0, tris: 0 }),
+      }),
+      s2w: (px: number, py: number) => this.screenToWorld(px, py),
+      view: () => ({ camX: this.camX, camY: this.camY, ppu: this.ppu }),
+    };
   }
 
   private minimapData(): { x: number; y: number; c: string; s: number; o?: 1; w?: 1 }[] {
@@ -3202,6 +3293,8 @@ export class Game {
     window.removeEventListener("resize", this.onResizeBound);
     this.input.dispose();
     this.audio.dispose();
+    this.disable3d(); // снять GL-слои «шубы» (12a) вместе с игрой
+    if (BRIDGES) delete (window as unknown as Record<string, unknown>).__gl;
     delete window.__gameProbe;
     window.__GAME_READY__ = false;
     gameApi.current = null;

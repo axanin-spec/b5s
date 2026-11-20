@@ -3,6 +3,11 @@
  * renderFrame рисует мир на канвасе по структурному контексту RenderCtx; Game
  * передаёт себя и держит одну обёртку. Логики мира здесь нет — только камера,
  * параллакс, тела, корабли, эффекты, HUD-слои в мировом пространстве.
+ *
+ * Этап 12a: кадр разобран на проходы (updateCamera → drawBackground → drawBodies →
+ * drawEntities → drawAnnotations → drawOverlay), чтобы WebGL-бэкенд (gl.ts) вставал
+ * на место bodies+entities, не трогая камеру, параллакс и экранные оверлеи.
+ * 2D-режим рисует все проходы на одном канвасе в прежнем порядке.
  */
 
 import { GATE_CFG, QUALITY, RAID, WORLD_CFG } from "./config";
@@ -28,7 +33,13 @@ export function paletteTex(): HTMLCanvasElement[] {
 }
 
 /** Масштаб спрайтов кораблей к их радиусу столкновений. */
-const SHIP_SCALE = 2.4;
+export const SHIP_SCALE = 2.4;
+
+/** Спрайтовый размер станции/планеты и врат в css-пикселях — общие для canvas и GL (12a). */
+export const bodySizePx = (d: Dockable, ppu: number): number => (d.isStation ? d.radius * 2.6 : d.radius * 2.1) * ppu;
+export const gateSizePx = (ppu: number): number => GATE_CFG.RADIUS * 2.4 * ppu;
+/** Пульс врат: фаза крутится в updateCamera, формула общая для 2D и GL. */
+export const gatePulse = (gateSpin: number): number => 1 + 0.055 * Math.sin(gateSpin * 2.2);
 
 interface RingFx { life: number; maxLife: number; x: number; y: number; r: number; vr: number; hot: boolean }
 interface Floater { x: number; y: number; t: number; ttl: number; text: string; c: string; big: boolean }
@@ -53,7 +64,6 @@ export interface RenderCtx {
   lowParticles: boolean;
   badWindows: number;
   goodWindows: number;
-  bgGradient: CanvasGradient | null;
   dockables: Dockable[];
   dockSpin: number[];
   dockSpinVel: number[];
@@ -86,7 +96,22 @@ export interface RenderCtx {
 const sx = (c: RenderCtx, wx: number): number => (wx - c.camSx) * c.ppu + window.innerWidth / 2;
 const sy = (c: RenderCtx, wy: number): number => (c.camSy - wy) * c.ppu + window.innerHeight / 2;
 
-export function renderFrame(c: RenderCtx): void {
+/** Deep-space gradient lives per canvas context (a CanvasGradient is bound to its ctx):
+ *  in 3D mode the background pass draws onto a second canvas, so cache by ctx. */
+const BG_GRAD = new WeakMap<CanvasRenderingContext2D, { w: number; h: number; g: CanvasGradient }>();
+function bgGrad(ctx: CanvasRenderingContext2D): CanvasGradient {
+  const W = window.innerWidth, H = window.innerHeight;
+  const hit = BG_GRAD.get(ctx);
+  if (hit && hit.w === W && hit.h === H) return hit.g;
+  const g = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, Math.hypot(W, H) / 1.6);
+  g.addColorStop(0, "#070c18");
+  g.addColorStop(1, "#02040a");
+  BG_GRAD.set(ctx, { w: W, h: H, g });
+  return g;
+}
+
+/** Камера, адаптивное качество, тряска — общие для обоих рендер-бэкендов (шов 12a). */
+export function updateCamera(c: RenderCtx): void {
   // auto quality: sustained low fps → cheaper particles, then supersample, then layers.
   // hysteresis: 2 bad windows (4s) to step down, 8 good (16s) to step back up
   c.fpsAccum += 1;
@@ -111,8 +136,6 @@ export function renderFrame(c: RenderCtx): void {
 
   const st = c.sm.state;
   const p = c.ships[0];
-  const ctx = c.ctx;
-  const W = window.innerWidth, H = window.innerHeight;
 
   // camera target
   if (st === "title") {
@@ -137,16 +160,17 @@ export function renderFrame(c: RenderCtx): void {
   c.camSx = c.camX + shX;
   c.camSy = c.camY + shY;
 
+  // gate arcs phase — one tick per frame for both backends (2D loop and GL read it)
+  c.gateSpin += 0.006;
+}
+
+/** Фон: глубокий космос, параллакс, орбиты, тепловое кольцо — нижний холст в 3D-режиме. */
+export function drawBackground(c: RenderCtx, ctx: CanvasRenderingContext2D): void {
+  const W = window.innerWidth, H = window.innerHeight;
+
   // clear: subtle deep-space gradient instead of a flat fill
-  const bg = c.bgGradient || (c.bgGradient = (() => {
-    const g = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, Math.hypot(W, H) / 1.6);
-    g.addColorStop(0, "#070c18");
-    g.addColorStop(1, "#02040a");
-    return g;
-  })());
-  ctx.fillStyle = bg;
+  ctx.fillStyle = bgGrad(ctx);
   ctx.fillRect(0, 0, W, H);
-  perf.begin();
 
   /* parallax layers: effective world pos = s - cam * f;
      tier 2 drops the nebula (f .3) and near-dust (f .7) layers — the two biggest blits */
@@ -204,6 +228,11 @@ export function renderFrame(c: RenderCtx): void {
     ctx.stroke();
     ctx.setLineDash([]);
   }
+}
+
+/** Тела: звезда, планеты/станции, врата (текстурные слои). Подписи и хинты — drawAnnotations. */
+export function drawBodies(c: RenderCtx, ctx: CanvasRenderingContext2D): void {
+  const W = window.innerWidth, H = window.innerHeight;
 
   /* the star */
   {
@@ -215,7 +244,7 @@ export function renderFrame(c: RenderCtx): void {
   /* planets + stations */
   for (let i = 0; i < c.dockables.length; i++) {
     const d = c.dockables[i];
-    const scale = (d.isStation ? d.radius * 2.6 : d.radius * 2.1) * c.ppu;
+    const scale = bodySizePx(d, c.ppu);
     const x = sx(c, d.x), y = sy(c, d.y);
     if (x + scale / 2 < 0 || x - scale / 2 > W || y + scale / 2 < 0 || y - scale / 2 > H) continue;
     c.dockSpin[i] += c.dockSpinVel[i];
@@ -224,30 +253,12 @@ export function renderFrame(c: RenderCtx): void {
     ctx.rotate(c.dockSpin[i]);
     ctx.drawImage(c.dockTex[i], -scale / 2, -scale / 2, scale, scale);
     ctx.restore();
-    // docking range hint for the current target
-    if (c.dockTarget === d && st === "playing") {
-      ctx.strokeStyle = "rgba(84,255,210,0.55)";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(x, y, scale / 2 + 10, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-    // raid heist: an orange arc closing over the storehouse being emptied (5d)
-    if (c.grabTarget === d.id && c.raid && c.raid.timeLeft > 0) {
-      const frac = Math.max(0, Math.min(1, c.grabT / RAID.GRAB_TIME));
-      ctx.strokeStyle = "#ff9a3a";
-      ctx.lineWidth = 4;
-      ctx.beginPath();
-      ctx.arc(x, y, scale / 2 + 16, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2);
-      ctx.stroke();
-    }
   }
 
   /* hyperspace gates — additive event horizon behind slowly counter-rotating arcs */
-  c.gateSpin += 0.006;
-  const gPulse = 1 + 0.055 * Math.sin(c.gateSpin * 2.2);
+  const gPulse = gatePulse(c.gateSpin);
   for (const g of c.gates) {
-    const scale = GATE_CFG.RADIUS * 2.4 * c.ppu;
+    const scale = gateSizePx(c.ppu);
     const x = sx(c, g.x), y = sy(c, g.y);
     if (x + scale < 0 || x - scale > W || y + scale < 0 || y - scale > H) continue;
     ctx.save();
@@ -263,23 +274,17 @@ export function renderFrame(c: RenderCtx): void {
     ctx.rotate(c.gateSpin);
     ctx.drawImage(c.gateTex, -scale / 2, -scale / 2, scale, scale);
     ctx.restore();
-    ctx.font = `${Math.max(11, Math.round(14 * c.ppu))}px ui-sans-serif, system-ui, sans-serif`;
-    ctx.textAlign = "center";
-    ctx.fillStyle = "rgba(215,232,238,0.85)";
-    ctx.fillText(`⇄ ${g.name}`, x, y + scale / 2 + 20 * c.ppu);
-    if (c.jumpGate === g && st === "playing") {
-      ctx.strokeStyle = "rgba(84,255,210,0.55)";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(x, y, scale / 2 + 10, 0, Math.PI * 2);
-      ctx.stroke();
-    }
   }
 
   perf.mark("bodies");
+}
+
+/** Пикапы, корабли, болты, частицы, ударные волны. Обводки-статусы — drawAnnotations. */
+export function drawEntities(c: RenderCtx, ctx: CanvasRenderingContext2D): void {
+  const W = window.innerWidth, H = window.innerHeight;
+  const t = performance.now() * 0.001;
 
   /* pickups */
-  const t = now * 0.001;
   for (const pk of c.pickups) {
     if (!pk.active) continue;
     const size = 46 * c.ppu;
@@ -305,24 +310,6 @@ export function renderFrame(c: RenderCtx): void {
     const texs = s.cruiser ? c.shipTexMap.cruiser : c.shipTexMap[s.faction];
     ctx.drawImage(texs[texs.length > 1 ? i & 1 : 0], -scale / 2, -scale / 2, scale, scale);
     ctx.restore();
-    // shield ring flash after recent hits
-    if (s.shield > 0 && s.sinceHit < 0.35) {
-      ctx.strokeStyle = `rgba(111,195,255,${0.7 - s.sinceHit * 2})`;
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(x, y, s.radius * c.ppu + 6, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-    // pirate status (5f): dashed kin rings — blue around the raiders, hostile red around patrol
-    if (i !== 0 && c.isPirate() && (s.faction === "pirate" || s.faction === "patrol")) {
-      ctx.strokeStyle = s.faction === "pirate" ? "rgba(90,159,255,0.45)" : "rgba(255,90,74,0.45)";
-      ctx.lineWidth = 2;
-      ctx.setLineDash([7, 7]);
-      ctx.beginPath();
-      ctx.arc(x, y, s.radius * c.ppu + 10, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
   }
 
   /* bolts */
@@ -369,6 +356,84 @@ export function renderFrame(c: RenderCtx): void {
   ctx.globalCompositeOperation = "source-over";
   ctx.globalAlpha = 1;
   perf.mark("fx");
+}
+
+/** Мировые обводки поверх текста: хинты стыковки/прыжка, дуга налёта, щиты, кин-кольца.
+ *  В GL-режиме рисуются на прозрачном канвасе ввода — поэтому вынесены из тела/кораблей. */
+export function drawAnnotations(c: RenderCtx, ctx: CanvasRenderingContext2D): void {
+  const st = c.sm.state;
+  const W = window.innerWidth, H = window.innerHeight;
+
+  /* docking range hint for the current target */
+  if (c.dockTarget && st === "playing") {
+    const scale = bodySizePx(c.dockTarget, c.ppu);
+    const x = sx(c, c.dockTarget.x), y = sy(c, c.dockTarget.y);
+    ctx.strokeStyle = "rgba(84,255,210,0.55)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(x, y, scale / 2 + 10, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  /* raid heist: an orange arc closing over the storehouse being emptied (5d) */
+  if (c.grabTarget && c.raid && c.raid.timeLeft > 0) {
+    const d = c.dockables.find((x) => x.id === c.grabTarget);
+    if (d) {
+      const scale = bodySizePx(d, c.ppu);
+      const x = sx(c, d.x), y = sy(c, d.y);
+      const frac = Math.max(0, Math.min(1, c.grabT / RAID.GRAB_TIME));
+      ctx.strokeStyle = "#ff9a3a";
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(x, y, scale / 2 + 16, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+  /* gate labels + jump hint */
+  const gScale = gateSizePx(c.ppu);
+  for (const g of c.gates) {
+    const x = sx(c, g.x), y = sy(c, g.y);
+    if (x + gScale < 0 || x - gScale > W || y + gScale < 0 || y - gScale > H) continue;
+    ctx.font = `${Math.max(11, Math.round(14 * c.ppu))}px ui-sans-serif, system-ui, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.fillStyle = "rgba(215,232,238,0.85)";
+    ctx.fillText(`⇄ ${g.name}`, x, y + gScale / 2 + 20 * c.ppu);
+    if (c.jumpGate === g && st === "playing") {
+      ctx.strokeStyle = "rgba(84,255,210,0.55)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(x, y, gScale / 2 + 10, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+  for (let i = 0; i < c.ships.length; i++) {
+    const s = c.ships[i];
+    if (!s.active) continue;
+    const x = sx(c, s.x), y = sy(c, s.y);
+    /* shield ring flash after recent hits */
+    if (s.shield > 0 && s.sinceHit < 0.35) {
+      ctx.strokeStyle = `rgba(111,195,255,${0.7 - s.sinceHit * 2})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(x, y, s.radius * c.ppu + 6, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    /* pirate status (5f): dashed kin rings — blue around the raiders, hostile red around patrol */
+    if (i !== 0 && c.isPirate() && (s.faction === "pirate" || s.faction === "patrol")) {
+      ctx.strokeStyle = s.faction === "pirate" ? "rgba(90,159,255,0.45)" : "rgba(255,90,74,0.45)";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([7, 7]);
+      ctx.beginPath();
+      ctx.arc(x, y, s.radius * c.ppu + 10, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
+}
+
+/** Экранные слои: путевая точка, прицел, ₡-всплывашки, варп-вспышка. */
+export function drawOverlay(c: RenderCtx, ctx: CanvasRenderingContext2D): void {
+  const st = c.sm.state;
+  const W = window.innerWidth, H = window.innerHeight;
 
   /* plotted course: diamond over the target, or a compass arrow pinned to the screen edge */
   if (c.waypoint && st === "playing") {
@@ -466,11 +531,43 @@ export function renderFrame(c: RenderCtx): void {
     }
     ctx.restore();
   }
+}
 
+function finishFrame(c: RenderCtx): void {
   perf.end();
   window.__GAME_READY__ = true;
   if (!c.splashRemoved) {
     c.splashRemoved = true;
     document.getElementById("boot-splash")?.remove();
   }
+}
+
+/** Классический Canvas2D-кадр: все проходы на одном канвасе (режим по умолчанию). */
+export function renderFrame(c: RenderCtx): void {
+  updateCamera(c);
+  const ctx = c.ctx;
+  perf.begin();
+  drawBackground(c, ctx);
+  drawBodies(c, ctx);
+  drawEntities(c, ctx);
+  drawAnnotations(c, ctx);
+  drawOverlay(c, ctx);
+  finishFrame(c);
+}
+
+/** Стоянок GL-бэкенда (gl.ts): рисует проходы тел/сущностей вместо canvas-слоёв. */
+export interface GlSink { frame(c: RenderCtx): void }
+
+/** Тот же кадр в 3D-режиме (12a): фон на нижнем холсте, мир — GL-слоем,
+ *  поверх — канвас ввода с прозрачным оверлеем (анимации кораблей ведёт GL). */
+export function renderGlFrame(c: RenderCtx, gl: GlSink, bgCtx: CanvasRenderingContext2D): void {
+  updateCamera(c);
+  perf.begin();
+  drawBackground(c, bgCtx);
+  gl.frame(c);
+  const ctx = c.ctx;
+  ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+  drawAnnotations(c, ctx);
+  drawOverlay(c, ctx);
+  finishFrame(c);
 }
