@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { GOODS, REP, repLabel } from '@/game/config'
 import { gameApi, type StationSnapshot } from '@/game/uiBridge'
+import { GoodIcon } from './GoodIcon'
 
 function fmt(n: number): string {
   return n.toLocaleString('ru-RU')
@@ -77,7 +78,7 @@ export function StationScreen({ s }: { s: StationSnapshot }) {
                 return (
                   <div className={`trade-row ${hot ? 'hot' : ''}`} key={g.id}>
                     <span className="trade-good">
-                      {g.name}{hot && <em className="hot-badge">СПРОС ↑</em>}
+                      <GoodIcon id={g.id} /><b className="trade-name">{g.name}</b>{hot && <em className="hot-badge">СПРОС ↑</em>}
                     </span>
                     <span className="trade-price">
                       <b>{fmt(p.buy)}</b>

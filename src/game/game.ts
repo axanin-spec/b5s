@@ -2830,6 +2830,7 @@ export class Game {
       hull: Math.max(0, Math.round(p.hp)), maxHull: Math.round(p.maxHp),
       shield: Math.max(0, Math.round(p.shield)), maxShield: Math.round(p.maxShield),
       cargoUsed: this.cargoUsed(), cargoMax: this.cargoMax(),
+      cargo: { ...this.player.cargo },
       speed: Math.round(Math.hypot(p.vx, p.vy)),
       kills: this.player.kills,
       outlaw: this.player.outlaw,

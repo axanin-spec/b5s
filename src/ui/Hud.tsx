@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
-import { REP, VICTORY_SHARE } from '@/game/config'
+import { GOODS, REP, VICTORY_SHARE } from '@/game/config'
 import { gameApi, type Snapshot } from '@/game/uiBridge'
+import { GoodIcon } from './GoodIcon'
 
 function fmt(n: number): string {
   return n.toLocaleString('ru-RU')
@@ -83,7 +84,7 @@ function RadioPanel({ radio }: { radio: NonNullable<Snapshot['radio']> }) {
           <div className="radio-sec-title">ПРОДАЁТ</div>
           {radio.sells.map((s) => (
             <div className="radio-row" key={`s-${s.goodId}`}>
-              <span className="radio-good">{s.name}</span>
+              <span className="radio-good"><GoodIcon id={s.goodId} className="sm" />{s.name}</span>
               <span className="radio-price">₡{fmt(s.unit)}<i>×{s.qty}</i></span>
               <span className="radio-acts">
                 <button className="radio-btn" onClick={() => api()?.radioBuy(radio.shipIdx, s.goodId, 1)}>+1</button>
@@ -98,7 +99,7 @@ function RadioPanel({ radio }: { radio: NonNullable<Snapshot['radio']> }) {
           <div className="radio-sec-title">КУПАЕТ</div>
           {radio.buys.map((b) => (
             <div className="radio-row" key={`b-${b.goodId}`}>
-              <span className="radio-good">{b.name}</span>
+              <span className="radio-good"><GoodIcon id={b.goodId} className="sm" />{b.name}</span>
               <span className="radio-price">₡{fmt(b.unit)}<i>×{b.maxQty}</i></span>
               <span className="radio-acts">
                 <button className="radio-btn sell" onClick={() => api()?.radioSell(radio.shipIdx, b.goodId, 1)}>−1</button>
@@ -135,6 +136,16 @@ export function Hud({ snap, isTouch }: { snap: Snapshot; isTouch: boolean }) {
           <span className="share-label">доля {(hud.share * 100).toFixed(1)}%</span>
         </div>
         <div className="hud-line">Трюм: {hud.cargoUsed}/{hud.cargoMax}</div>
+        {/* трюм по сортам (Этап 10f): иконки грузов, что реально в holds */}
+        {GOODS.some((g) => (hud.cargo[g.id] ?? 0) > 0) && (
+          <div className="cargo-strip" title="Груз в трюме">
+            {GOODS.filter((g) => (hud.cargo[g.id] ?? 0) > 0).map((g) => (
+              <span className="cargo-chip" key={g.id}>
+                <GoodIcon id={g.id} className="sm" />×{hud.cargo[g.id]}
+              </span>
+            ))}
+          </div>
+        )}
         <div className="hud-line">Победы: {hud.kills}</div>
         <div className="hud-rep" title="Репутация во фракциях">
           <span className={`rep-chip ${hud.rep.patrol <= REP.UNFRIENDLY ? 'bad' : hud.rep.patrol >= REP.FRIENDLY ? 'good' : ''}`}>

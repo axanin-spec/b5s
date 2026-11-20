@@ -572,6 +572,34 @@ kbd {
 .trade-actions { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
 /* «продать весь трюм» (10d) — строка под таблицей товаров */
 .trade-foot { display: flex; justify-content: flex-end; margin-top: 10px; }
+
+/* иконки товаров (Этап 10f): AI-арт 256², читаемый и на 20 px; фолбэк — текст (img скрыт при ошибке) */
+.good-ico {
+  width: 32px; height: 32px;
+  vertical-align: middle;
+  margin-right: 8px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: #060d1a;
+  border: 1px solid rgba(84, 255, 210, 0.18);
+  flex: none;
+}
+.good-ico.sm { width: 22px; height: 22px; margin-right: 6px; border-radius: 5px; }
+.trade-good { display: flex; align-items: center; }
+.trade-name { font-weight: 600; }
+/* трюм по сортам в HUD — чипы «иконка ×кол-во» */
+.cargo-strip { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.cargo-chip {
+  display: flex; align-items: center;
+  padding: 2px 6px 2px 2px;
+  border-radius: 7px;
+  background: rgba(84, 255, 210, 0.06);
+  border: 1px solid rgba(84, 255, 210, 0.15);
+  color: var(--text);
+  font: 600 11px ui-monospace, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+.cargo-chip .good-ico { margin-right: 4px; }
 .trade-foot .btn { color: var(--gold); border-color: rgba(255, 200, 87, 0.45); }
 .trade-foot .btn:disabled { opacity: 0.3; }
 .trade-note { margin-top: 12px; font-size: 12px; color: var(--text-dim); }

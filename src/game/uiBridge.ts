@@ -14,6 +14,8 @@ export interface HudData {
   hull: number; maxHull: number;
   shield: number; maxShield: number;
   cargoUsed: number; cargoMax: number;
+  /** Per-good hold contents for the HUD cargo strip (icon chips). */
+  cargo: Record<string, number>;
   speed: number;
   kills: number;
   outlaw: boolean;
