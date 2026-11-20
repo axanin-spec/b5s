@@ -14,14 +14,20 @@
  *  8. perf: EMA кадра <8 мс на реальном GPU (на SwiftShader/headless — только репорт);
  *  9. эффекты 12c: под зажатой ЛКМ летят трассеры (tracers>0); __sim.kill("pirate") →
  *     Points-частицы взрыва (points>0) и ударное кольцо на грунте (shocks>0);
- *  10. небо 12c: параллакс-звёзды собраны в Points-слои (stars>0).
+ *  10. небо 12c: параллакс-звёзды собраны в Points-слои (stars>0);
+ *  11. переключатель 12d: живое переключение 3D→2D→3D из панели настроек без перезагрузки
+ *     (окно pause → «⚙ Настройки» → сегменты «2D»/«3D»);
+ *  12. откат 12d: синтетический webglcontextlost на #gl-canvas → режим сам гаснет в 2d;
+ *  13. persist 12d: settings render:"2d" → старт в 2d при живом WebGL2 (gl-canvas нет);
+ *  14. дефолт 12d: пустые настройки (auto) → старт сразу в 3d на WebGL2-браузере;
+ *  15. бандл 12d: three уехал из главного чанка в async-чанк (dynamic import).
  *
  * Использование: npm run preskin && npm run skin   (сервит dist/, как intel-test)
  */
 import { chromium } from "playwright";
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -81,8 +87,10 @@ await page.waitForTimeout(400);
 const g0 = await page.evaluate(() => window.__gameProbe());
 
 // ── 1/2. включение 3d: мост, порядок холстов ──
-const en = await page.evaluate(() => {
-  const r = window.__gl.enable();
+// 12d: enable ждёт dynamic-импорт three → await; boot с настройкой auto уже мог включить 3d —
+// повторный вызов тогда просто подтверждает режим.
+const en = await page.evaluate(async () => {
+  const r = await window.__gl.enable();
   // порядок среди трёх слоёв рендера (миникарта HUD — не холст мира, её не считаем)
   const sel = "canvas#bg-canvas, canvas#gl-canvas, canvas#game-canvas";
   return { r, layers: [...document.querySelectorAll(sel)].map((c) => c.id) };
@@ -167,14 +175,75 @@ const okShots = existsSync(join(ROOT, "verification-shots", "skin-play.png"));
 const software = /swiftshader|llvmpipe|software/i.test(st.gpu || "") || st.gpu === "unknown";
 const okPerf = software ? true : st.ms < 8;
 
+// ── 11. 12d: живое переключение из панели настроек (пауза → ⚙ Настройки → 2D/3D) ──
+await page.keyboard.press("Escape"); // пауза → меню с кнопкой настроек
+await page.waitForTimeout(250);
+await page.getByRole("button", { name: /Настройки/ }).click();
+await page.waitForTimeout(150);
+await page.locator(".set-seg-btn").filter({ hasText: /^2D$/ }).click();
+await page.waitForTimeout(350);
+const ui2d = await page.evaluate(() => ({
+  mode: window.__gl.state().mode, glc: !!document.getElementById("gl-canvas"),
+}));
+await page.locator(".set-seg-btn").filter({ hasText: /^3D$/ }).click();
+await page.waitForTimeout(900); // чанк three уже в памяти — включение почти мгновенно
+const ui3d = await page.evaluate(() => ({
+  mode: window.__gl.state().mode, sprites: window.__gl.state().sprites,
+}));
+const okUiToggle = ui2d.mode === "2d" && !ui2d.glc && ui3d.mode === "3d" && ui3d.sprites > 0;
+
+// ── 12. 12d: webglcontextlost → автооткат в 2d с внятным тикером ──
+await page.evaluate(() => {
+  document.getElementById("gl-canvas")
+    ?.dispatchEvent(new Event("webglcontextlost", { cancelable: true }));
+});
+await page.waitForTimeout(250);
+const lostSt = await page.evaluate(() => ({
+  mode: window.__gl.state().mode,
+  news: document.body.innerText.includes("2D"), // тикер объясняет откат игроку
+}));
+const okLost = lostSt.mode === "2d" && lostSt.news;
+
+// ── 13. 12d: persist — render:"2d" переживает перезагрузку при живом WebGL2 ──
+await page.evaluate(() =>
+  localStorage.setItem("game.settings", JSON.stringify({ master: 0.5, music: 0.8, sfx: 0.85, render: "2d" })));
+await page.reload({ waitUntil: "load" });
+await page.waitForFunction(() => window.__GAME_READY__ === true, null, { timeout: 30000 });
+await page.waitForTimeout(800);
+const p2d = await page.evaluate(() => ({
+  mode: window.__gl.state().mode, glc: !!document.getElementById("gl-canvas"),
+}));
+const okPersist = p2d.mode === "2d" && !p2d.glc;
+
+// ── 14. 12d: дефолт auto → старт сразу в 3d (браузер прогона с WebGL2) ──
+await page.evaluate(() => localStorage.removeItem("game.settings"));
+await page.reload({ waitUntil: "load" });
+await page.waitForFunction(() => window.__GAME_READY__ === true, null, { timeout: 30000 });
+await page.waitForTimeout(1500); // dynamic-чанк + вставка холстов до первой GL-рамки
+const auto = await page.evaluate(() => ({
+  mode: window.__gl.state().mode, sprites: window.__gl.state().sprites,
+  glc: !!document.getElementById("gl-canvas"),
+}));
+const okAuto = auto.mode === "3d" && auto.glc && auto.sprites > 0;
+
+// ── 15. 12d: three вынесен из главного чанка в async-чанк (dynamic import) ──
+const ASSETS = join(DIST, "assets");
+const chunks = readdirSync(ASSETS).filter((f) => f.endsWith(".js"));
+const mainChunk = chunks.find((f) => /^index-.*\.js$/.test(f)) ?? "";
+const mainTxt = mainChunk ? readFileSync(join(ASSETS, mainChunk), "utf8") : "WebGLRenderer";
+const threeIn = chunks.filter((f) => readFileSync(join(ASSETS, f), "utf8").includes("WebGLRenderer"));
+const okChunk = !mainTxt.includes("WebGLRenderer") && threeIn.some((f) => f !== mainChunk);
+
 await done({
   okGl, okLayers, okAim, okRound, okNonBlack, okProbe2d, okInput, okPerf, okShots,
   okTracers, okFx, okSky,
+  okUiToggle, okLost, okPersist, okAuto, okChunk,
   noPageErrors: pageErrors.length === 0,
 }, {
   layers: en.layers,
   glState: st,
   fx: { tracers: fx0.tracers, killAt, points: fx1.points, shocks: fx1.shocks, stars: fx1.stars },
+  sw: { ui2d, ui3d, lostSt, p2d, auto, mainChunk, threeChunks: threeIn },
   softwareRaster: software,
   seam: {
     v: seam.v, center: seam.center, right: seam.right, up: seam.up,

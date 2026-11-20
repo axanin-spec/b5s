@@ -91,6 +91,16 @@ const consoleErrors = [];
 page.on("console", (m) => { if (m.type() === "error") consoleErrors.push(m.text()); });
 page.on("pageerror", (e) => consoleErrors.push(String(e)));
 
+// Этап 12d: детерминизм — первый проход всегда в 2D (иначе на WebGL2-движке дефолт auto
+// увёл бы эти классические проверки в GL-канвас). Режим 3D проверяется вторым проходом ниже.
+await page.addInitScript(() => {
+  // ключ отсутствует — свежий профиль: фиксируем 2D; уже задан (секция 3D ниже) — не трогаем
+  try {
+    if (!localStorage.getItem("game.settings"))
+      localStorage.setItem("game.settings", JSON.stringify({ master: 0.5, music: 0.8, sfx: 0.85, render: "2d" }));
+  } catch { /* storage off */ }
+});
+
 await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: "networkidle" });
 // The page boots through a React shell (src/main.tsx -> src/App.tsx -> src/pages/Home.tsx),
 // so the canvas only exists after the first effect runs: wait for the readiness flag the game
@@ -213,9 +223,44 @@ await page.keyboard.press("Escape");
 await page.waitForTimeout(300);
 await page.screenshot({ path: join(SHOTS, "03-paused.png") });
 
+// 4b) Этап 12d: второй проход — режим 3D. Ставим render:"3d" в settings, перезагружаемся,
+// ждём #gl-canvas (boot сам включает 3D) и читаем GL drawing buffer на непустоту.
+await page.evaluate(() =>
+  localStorage.setItem("game.settings", JSON.stringify({ master: 0.5, music: 0.8, sfx: 0.85, render: "3d" })));
+await page.reload({ waitUntil: "networkidle" });
+await page
+  .waitForFunction(() => window.__GAME_READY__ === true, null, { timeout: 8000 })
+  .catch(() => console.warn("WARN: __GAME_READY__ not raised after reload — falling back to fixed wait"));
+await page
+  .waitForFunction(() => !!document.getElementById("gl-canvas"), null, { timeout: 5000 })
+  .catch(() => {}); // нет холста — пусть честно провалится проверка ниже
+await page.waitForTimeout(900); // несколько GL-кадров (preserveDrawingBuffer держит последний)
+const shot3d = await page.evaluate(() => {
+  const el = document.getElementById("gl-canvas");
+  if (!el) return { kind: "no-canvas" };
+  const gl = el.getContext("webgl2") || el.getContext("webgl");
+  if (!gl) return { kind: "no-context" };
+  const w = gl.drawingBufferWidth, h = gl.drawingBufferHeight;
+  if (!w || !h) return { kind: "empty", w, h };
+  const px = new Uint8Array(4);
+  let lit = 0;
+  for (const [fx, fy] of [[0.5, 0.5], [0.25, 0.5], [0.75, 0.5], [0.5, 0.25], [0.5, 0.75]]) {
+    gl.readPixels((w * fx) | 0, (h * fy) | 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    if (px[3] > 0 && px[0] + px[1] + px[2] > 8) lit++;
+  }
+  return { kind: "lit", lit, total: 5 };
+});
+if (shot3d.kind === "no-canvas")
+  fail("render:\"3d\" in settings did not create #gl-canvas — авто-включение 3D на старте сломано (или WebGL2 недоступен в этом браузере)");
+if (shot3d.kind !== "lit" || shot3d.lit < 2)
+  fail(`#gl-canvas пуст в 3D-проходе (${JSON.stringify(shot3d)}) — GL-рендер после перезагрузки не рисует`);
+await page.keyboard.press("Space");
+await page.waitForTimeout(400);
+await page.screenshot({ path: join(SHOTS, "04-gameplay-3d.png") });
+
 // 5) Zero console errors
 if (consoleErrors.length) fail(`${consoleErrors.length} console error(s): ${consoleErrors[0]}`);
 
 await browser.close();
 server.close();
-console.log("VERIFY OK: render/enter/direction/pause/console all passed; screenshots in verification-shots/");
+console.log("VERIFY OK: 2D render/enter/direction/pause + 3D boot/render + console all passed; screenshots in verification-shots/");

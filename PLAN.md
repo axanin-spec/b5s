@@ -422,8 +422,9 @@
 ### Этап 12 — 2.5D-«шуба»: WebGL-рендер под той же симуляцией
 
 Принцип: симуляция не трогается (ядро game.ts, экономика, флот, миссии, сейвы, React UI) —
-three.js только рисует. Canvas2D-рендер остаётся fallback-режимом (настройка `render: 2d/3d`,
-до 12d дефолт в пробах — 2d, чтобы регрессия не дрожала). Контракт координат:
+three.js только рисует. Canvas2D-рендер остаётся fallback-режимом (настройка `render: auto/2d/3d`;
+с 12d дефолт auto = 3d при WebGL2, первый проход verify зафиксирован в 2d через addInitScript,
+чтобы классическая регрессия не дрожала). Контракт координат:
 world (x, y) → three (x, 0, −z) — совпадает с `__gameProbe {z: −y}` и verify-контрактом
 «W → z уменьшается». three был в проекте до 9d — возвращаем `three` + `@types/three`.
 
@@ -483,9 +484,23 @@ world (x, y) → three (x, 0, −z) — совпадает с `__gameProbe {z: �
   градиент (drawBackground skipRings+skipSky). Bloom ОТЛОЖЕН: perf и так 0.4–0.7 мс,
   постпроход удвоил бы drawCalls и сломал бы побайтовый 2D-паритет кадров — возвращаться
   по требованию. Зонд skin +3 флага (okTracers/okFx/okSky): 13/13 на реальном GPU.
-- [ ] **12d. Переключатель и приёмка.** `render` в settings (НЕ в SaveGame — версия сейва
-  не меняется), автооткат на `webglcontextlost`, verify/skin в обоих режимах, perf-профиль,
-  документация. Дефолт 3d при наличии WebGL2.
+- [x] **12d. Переключатель и приёмка.** ✅ 2026-11-20. `render: "auto"|"2d"|"3d"` в
+  game.settings (localStorage, ВНЕ SaveGame — SAVE_VERSION 9 не тронут; loadSettings/
+  updateSettings валидируют значение). Дефолт auto = 3d при WebGL2 (пробный
+  canvas.getContext("webgl2") без загрузки three, Game.hasWebGL2). Живое переключение:
+  Game подписан на onSettingsChange — панель «⚙ Настройки» → «ГРАФИКА» → сегменты
+  Авто/2D/3D (class set-seg) применяются мгновенно без перезагрузки. Автооткат:
+  webglcontextlost на #gl-canvas → preventDefault + glFailed-защёлка (до перезагрузки
+  3d не пробуем, глотаем каскад падений) + disable3d + тикер новостей объясняет игроку.
+  three → dynamic import: game.ts хранит только `import type`, рантайм-модуль тянется
+  loadGl() одним промисом; главный чанк 1002→446 КБ, three уехал в ленивый gl-*.js
+  (551 КБ, грузится только при включении 3D). async enable3d: гейт disposed-гонки,
+  повторная сверка режима после await (параллельные вызовы безопасны). verify: проход 1
+  зафиксирован в 2D (addInitScript пишет settings, если ключ пустой), проход 2 —
+  render:"3d" → reload → ждём #gl-canvas → readPixels непустоты → скрин 04-gameplay-3d.
+  skin 18 флагов (+okUiToggle/okLost/okPersist/okAuto/okChunk) — 18/18 на реальном GPU.
+  Perf-профиль: 3D 0.4–0.7 мс/кадр (RTX 5070 Ti), 2D-гейт преждний (60 Гц, Этап 4);
+  логические пробы от режима не зависят (пиксели читают только verify/skin).
 - Риски: swiftshader в headless-пробах (FPS-гейт только на реальном GPU по WEBGL_debug_renderer_info);
   `preserveDrawingBuffer` для чтения кадра из буфера (verify уже умеет ветку по типу canvas);
   наличие WebGL во встроенном браузере — проверить на 12a первым делом.
@@ -506,5 +521,5 @@ npm run smuggle  # автотест клановых контрабандист�
 npm run loot     # автотест трофейных модулей (11a)
 npm run watch    # автотест казны патруля и крейсера «Варта» (11b/11c)
 npm run focus    # автотест мышиного фокуса и карты (6b-хвост)
-npm run skin     # автотест WebGL-«шубы» (12a–12c): холсты, швы, эффекты, небо — 13 флагов
+npm run skin     # автотест WebGL-«шубы» (12a–12d): холсты, швы, эффекты, небо, переключатель — 18 флагов
 ```

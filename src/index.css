@@ -1188,3 +1188,26 @@ kbd {
   background: var(--accent);
 }
 .set-note { font-size: 11px; color: var(--text-dim); line-height: 1.4; }
+
+/* render-backend picker (Этап 12d) — segmented control in the same console skin */
+.set-seg { display: flex; gap: 6px; }
+.set-seg-btn {
+  flex: 1;
+  padding: 5px 0;
+  font: inherit;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  background: rgba(84, 255, 210, 0.06);
+  border: 1px solid rgba(84, 255, 210, 0.22);
+  border-radius: 2px;
+  cursor: pointer;
+}
+.set-seg-btn:hover { color: var(--accent); border-color: rgba(84, 255, 210, 0.5); }
+.set-seg-btn.on {
+  color: #06121e;
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 0 10px rgba(84, 255, 210, 0.35);
+  font-weight: 700;
+}

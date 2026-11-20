@@ -2,8 +2,9 @@
   "version": 1,
   "outDir": "dist",
   "files": {
-    "assets/index-B3L93zB1.css": "db66addd71bd320f7e4ca680f22f85fefd32a6c480d2b93d0c7422d785999a8b",
-    "assets/index-YCVqeXwK.js": "d6692dc08a58b469532b185d6ac8290448cfef809b9f0a7e2581840b82fcdc43",
-    "index.html": "ca4db1468fe1ac6bf5d4bd0fc10c781cb9f3503d54e9a32e0af339361dde3bd8"
+    "assets/index-Do3fwAqF.css": "9b67a3435bfda40bfc7963488ee806eee4e2c799e8d308fc12de4d5f63606172",
+    "assets/index-_bSo44iz.js": "6a72b00e86b1916d5a34979560220d8465e9979afae8a48f149b871048a77c51",
+    "assets/gl-CvLjBLfJ.js": "94e164642e145877f063b6d07383affb203eb23797d8ceb275725917e053ec34",
+    "index.html": "7450f7576511275d74317ee575a91fe1ee0e618b47bc8b75d0a760732ab082a1"
   }
 }
