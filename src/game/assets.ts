@@ -20,9 +20,21 @@ export function loadImage(url: string): Promise<HTMLImageElement | null> {
   return p;
 }
 
-/** Planet art PNG → circle-masked canvas (dockables render as circular sprites; the art's black corners would cover the starfield). */
-export async function loadPlanetTexture(kind: string): Promise<HTMLCanvasElement | null> {
-  const img = await loadImage(`assets/planets/${kind}.png`);
+/** Детерминированный выбор арт-варианта системы (Этап 10e): половина систем рисует батч "_b". */
+export function planetVariant(systemId: string): "" | "_b" {
+  let h = 0;
+  for (let i = 0; i < systemId.length; i++) h = (h * 31 + systemId.charCodeAt(i)) | 0;
+  return (h & 1) === 0 ? "_b" : "";
+}
+
+/**
+ * Planet art PNG → circle-masked canvas (dockables render as circular sprites; the art's
+ * black corners would cover the starfield). `variant` (Этап 10e) picks the second art batch
+ * ("_b") so two systems with the same planet kinds don't look cloned; missing variant → null,
+ * caller keeps the variant-a art or procedural fallback.
+ */
+export async function loadPlanetTexture(kind: string, variant = ""): Promise<HTMLCanvasElement | null> {
+  const img = await loadImage(`assets/planets/${kind}${variant}.png`);
   if (!img) return null;
   const S = 512;
   const c = document.createElement("canvas");

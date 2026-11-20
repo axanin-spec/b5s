@@ -28,7 +28,7 @@ import {
   mulberry32,
 } from "./textures";
 import type { SystemDef } from "./config";
-import { loadImage, loadPlanetTexture } from "./assets";
+import { loadImage, loadPlanetTexture, planetVariant } from "./assets";
 import { economyTick, findDockTarget, generateWorld, goodName, kindName, priceOf, refreshAllPrices, updateOrbits } from "./world";
 import { loadSave, writeSave, importSaveJson } from "./save";
 import { gameApi, uiBridge, type EndStats, type GameApi, type HudData, type MapSnapshot, type RadioSnapshot, type StationSnapshot } from "./uiBridge";
@@ -382,12 +382,17 @@ export class Game {
   /** Swap procedural planet canvases for AI art as it loads (fire-and-forget, keeps fallback on miss). */
   private loadDockArt(): void {
     const gen = ++this.worldGen;
+    const variant = planetVariant(this.systemDef.id); // 10e: половина систем рисует второй батч «_b»
     this.dockables.forEach((d, i) => {
       if (d.isStation) return;
-      void loadPlanetTexture(d.kind).then((tex) => {
+      const adopt = (tex: HTMLCanvasElement | null): void => {
         if (!tex || gen !== this.worldGen || i >= this.dockTex.length) return;
         this.dockTex[i] = tex;
         this.dockSpinVel[i] = 0; // day/night is baked in the art — spinning it would slide the terminator
+      };
+      void loadPlanetTexture(d.kind, variant).then((tex) => {
+        if (tex) adopt(tex);
+        else if (variant) void loadPlanetTexture(d.kind).then(adopt); // «_b» не лег — берём базовый батч
       });
     });
   }
