@@ -208,6 +208,8 @@ export interface GameApi {
   setTouchFiring(v: boolean): void;
   buy(goodId: string, qty: number): void;
   sell(goodId: string, qty: number): void;
+  /** «Продать весь трюм» (10d): разом сбыть все товары, что есть в трюме. */
+  sellAll(): void;
   /** Верфь (Этап 7): обмен корпуса с зачётом старого. */
   buyHull(id: string): void;
   /** Сдача корпуса на слом (кроме истребителя). */

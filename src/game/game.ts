@@ -1569,6 +1569,16 @@ export class Game {
     this.pushHud();
   }
 
+  /** «Продать весь трюм» (10d): сбыть все товары по порядку GOODS; каждая позиция —
+   * обычная сделка sell() со своими ограничениями кассы и просадкой цены. */
+  sellAll(): void {
+    const d = this.dockTarget;
+    if (!d || this.sm.state !== "docked") return;
+    for (const g of GOODS) {
+      if ((this.player.cargo[g.id] ?? 0) > 0) this.sell(g.id, 9999);
+    }
+  }
+
   /* ---- Верфь и лавка снаряжения (Этап 7) ---- */
 
   /** Прилавок этого терминала: клановая касса (оккупация и база) или гражданская станция. */
@@ -3061,6 +3071,7 @@ export class Game {
       setTouchFiring: (v) => this.input.setTouchFiring(v),
       buy: (g, q) => this.buy(g, q),
       sell: (g, q) => this.sell(g, q),
+      sellAll: () => this.sellAll(),
       buyHull: (id) => this.buyHull(id),
       sellHull: () => this.sellHull(),
       buyModule: (id) => this.buyModule(id),

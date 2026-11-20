@@ -6,6 +6,8 @@
  *  1. старт: истребитель с китом — hp/щит/реген/скорость/трюм/DPS из HULLS+EQUIP;
  *  2. консервация денег: покупка корпуса с зачётом, покупка/продажа модуля, сдача
  *     корпуса — delta не шевелится, деньги перетекают игрок ↔ stations 1:1;
+ *  2b. терминал 10d: «Макс» набивает трюм до упора (деньги/вместимость — clamp в buy),
+ *     «Продать весь трюм» (sellAll) обнуляет его, delta снова не шевелится, кнопки в DOM;
  *  3. гейты: шахта торгует только C/B и корпусами «any»; на хабе SS только с
  *     Альянсом ≥ +35; SSS и «флагманские» линии — только клановый рынок с кланами
  *     ≥ +35 (оккупированный Никс);
@@ -121,6 +123,36 @@ const okModuleSell = trades.a3.delta === trades.a2.delta && trades.a3.player ===
 const okHullSell = trades.a4.delta === trades.a3.delta && trades.a4.player === trades.a3.player + 25200
   && poolD(trades.a4, trades.a3, "stations") === -25200
   && trades.s4.ship === "fighter" && trades.s4.hp === 120 && trades.s4.installed.engine[0] === "spark-C";
+
+// ── 2b. товарный терминал (10d): «Макс» набивает трюм, «Продать весь трюм» пустит его;
+// delta не шевелится, деньги ходят игрок ↔ stations туда-обратно ──
+const goods = await page.evaluate(() => {
+  const api = window.__gameApi.current;
+  const st = () => window.__uiBridge.getSnapshot().station;
+  const used = (c) => Object.values(c).reduce((a, b) => a + b, 0);
+  const a0 = window.__econAudit();
+  const s0 = st();
+  api.buy("food", 9999); // кнопка «Макс»
+  const s1 = st();
+  const a1 = window.__econAudit();
+  api.sellAll(); // кнопка «Продать весь трюм»
+  const s2 = st();
+  const a2 = window.__econAudit();
+  // DOM: кнопки живые — «Макс» в каждой строке и подвал с общим сбросом трюма
+  const rowBtns = [...document.querySelectorAll(".trade-actions .mini-btn")].map((b) => b.textContent.trim());
+  const foot = document.querySelector(".trade-foot .btn");
+  return {
+    cargoMax: s1.cargoMax, used0: used(s0.cargo), used1: used(s1.cargo), used2: used(s2.cargo),
+    credits: [s0.credits, s1.credits, s2.credits],
+    a0, a1, a2,
+    ui: { max: rowBtns.includes("Макс"), foot: !!foot && foot.textContent.includes("Продать весь трюм") },
+  };
+});
+const okBuyMax = goods.a1.delta === goods.a0.delta && goods.used0 === 0
+  && goods.used1 === goods.cargoMax && goods.credits[1] < goods.credits[0];
+const okSellAll = goods.a2.delta === goods.a1.delta
+  && goods.used2 === 0 && goods.credits[2] > goods.credits[1];
+const okGoodsUi = goods.ui.max && goods.ui.foot;
 
 // ── 3a. шахта: только C/B и корпуса «any» ──
 const mine = await page.evaluate(() => {
@@ -239,11 +271,13 @@ const okSave = !!saved.sv && saved.sv.v === 9 && sameFleet(saved.sv.player, save
 
 await done({
   okStart, okDock, okHullBuy, okModuleBuy, okEquipDps, okModuleSell, okHullSell,
+  okBuyMax, okSellAll, okGoodsUi,
   okMine, okHubGate, okClanGate, okFit, okSave,
   noPageErrors: pageErrors.length === 0,
 }, {
   st0,
   trades: { money: [trades.a0, trades.a1, trades.a2, trades.a3, trades.a4].map((x) => ({ p: x.player, d: x.delta })), s1: trades.s1, s2: trades.s2, s4: trades.s4 },
+  goods: { used: [goods.used0, goods.used1, goods.used2], credits: goods.credits, cargoMax: goods.cargoMax, ui: goods.ui },
   mine, hubGate, clanGate, fit,
   save: { v: saved.sv?.v, credits: [saved.a.player, restored.a.player], delta: [saved.a.delta, restored.a.delta] },
   pageErrors: pageErrors.slice(0, 3),

@@ -570,6 +570,10 @@ kbd {
 .trade-price i { color: var(--text-dim); font-style: normal; }
 .trade-have { color: var(--gold); text-align: center; }
 .trade-actions { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
+/* «продать весь трюм» (10d) — строка под таблицей товаров */
+.trade-foot { display: flex; justify-content: flex-end; margin-top: 10px; }
+.trade-foot .btn { color: var(--gold); border-color: rgba(255, 200, 87, 0.45); }
+.trade-foot .btn:disabled { opacity: 0.3; }
 .trade-note { margin-top: 12px; font-size: 12px; color: var(--text-dim); }
 
 .yard-list { display: grid; gap: 10px; }

@@ -87,12 +87,22 @@ export function StationScreen({ s }: { s: StationSnapshot }) {
                     <span className="trade-actions">
                       <button className="mini-btn" onClick={() => api()?.buy(g.id, 1)}>+1</button>
                       <button className="mini-btn" onClick={() => api()?.buy(g.id, 10)}>+10</button>
+                      <button className="mini-btn" title="Набить трюм этим товаром" onClick={() => api()?.buy(g.id, 9999)}>Макс</button>
                       <button className="mini-btn sell" disabled={have < 1} onClick={() => api()?.sell(g.id, 1)}>−1</button>
                       <button className="mini-btn sell" disabled={have < 1} onClick={() => api()?.sell(g.id, 9999)}>Всё</button>
                     </span>
                   </div>
                 )
               })}
+              <div className="trade-foot">
+                <button
+                  className="btn btn-small sell"
+                  disabled={s.cargoUsed < 1}
+                  onClick={() => api()?.sellAll()}
+                >
+                  Продать весь трюм
+                </button>
+              </div>
               <div className="trade-note">
                 Цена покупки / цена продажи. Цены живут своей жизнью — следите за новостями.
                 {s.priceNote && <span className={`price-note ${s.reputation.trader >= REP.FRIENDLY ? 'good' : 'bad'}`}> {s.priceNote}.</span>}
