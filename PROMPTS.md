@@ -1,4 +1,4 @@
-# Промты этапов (готовые к исполнению)
+# Промты этапов
 
 ## Этап 10a — Торговая сводка на звёздной карте («рыночная разведка»)
 
@@ -34,15 +34,15 @@ economy.ts, world.ts, fleet.ts, missions.ts, render.ts, save.ts, uiBridge.ts), U
    снапшот цен станции целиком, перезаписывая прошлое наблюдение этой станции.
 2. **Сейв.** Поле в `SaveGame`, запись в `saveNow()`, восстановление в `continueGame()`.
    `SAVE_VERSION = 9`; `validateSave` при v8 подставляет `{}`.
-3. **Шина.** В `MapSnapshot` добавляем `intel: { dockableId: string; name: string; systemId: string;
-   t: number; prices: ... }[]` — собираем в методе, формирующем карту (рядом с `minimapData`,
-   строка ~3126), отдаём только станции с записанными наблюдениями.
+3. **Шина.** В `MapSnapshot` добавить `intel: { dockableId: string; name: string; systemId: string;
+   t: number; prices: ... }[]` — собирать в методе, формирующем карту (рядом с `minimapData`,
+   строка ~3126), отдавать только станции с записанными наблюдениями.
 4. **UI.** В `StarMap.tsx` на вкладке «Система» под чипами систем — сворачиваемый блок
    «Рынки»: таблица станций выбранной системы (имя, по каждому товару цена покупки/продажи,
    возраст данных вида «12 мин назад»). Старые данные (старше ~10 мин игрового времени)
-   визуально приглушить + пометка «устарело». Вкладку «Галактика» не трогаем.
+   визуально приглушить + пометка «устарело». Вкладка «Галактика» не трогать.
    Стили — в существующей манере `sm-*` классов из `src/index.css`.
-5. **Товары** берём из `GOODS` (config.ts), порядок колонок = порядок GOODS.
+5. **Товары** брать из `GOODS` (config.ts), порядок колонок = порядок GOODS.
 
 ### Приёмка
 - Стыковка со станцией → на карте появляются её цены; повторная стыковка обновляет.
@@ -55,3 +55,80 @@ economy.ts, world.ts, fleet.ts, missions.ts, render.ts, save.ts, uiBridge.ts), U
 ### Коммит
 `git add -A && git commit -m "Этап 10a: торговая сводка на звёздной карте — рыночная разведка по посещённым станциям, сейв v9"`
 и пометить пункт 10a в PLAN.md как ✅ с датой и кратким описанием решения.
+
+---
+
+## Этап 12a — 2.5D-«шуба»: three-скелет под той же симуляцией
+
+### Контекст проекта
+Браузерная 2D космопесочница «Космический Рейнджер»: React 19 + Canvas 2D + TypeScript + Vite,
+рабочая папка `E:\Рейнджеры\app`. Симуляция живёт в `src/game/` (game.ts — оркестратор ~3160 строк,
+economy/fleet/missions/world/save/uiBridge), кадр рисует `src/game/render.ts` (~700 строк
+процедурного Canvas 2D), все текстуры генерируются канвас-функциями `make*Texture` в
+`src/game/textures.ts`. План — `PLAN.md`, раздел «Этап 12 — 2.5D-шуба».
+
+### Цель
+Начать перевод картинки в 3D без касания симуляции: WebGL-слой на three.js, который рисует
+тот же мир ортографической камерой строго сверху (визуальный паритет с 2D-режимом). Canvas2D-
+рендер остаётся режимом по умолчанию; 3D включается точечно. Симуляция, физика, ИИ, экономика,
+сейвы, ввод — без изменений.
+
+### Ключевые точки в коде
+- `render.ts:37` — интерфейс `RenderCtx` («структурный хозяин кадра»: ppu, camX/camY, camSx/camSy,
+  пулы сущностей, флаги качества). Преобразование мир→экран: `sx/sy` (строки 86–87):
+  `sx = (wx − camSx)·ppu + innerWidth/2`, `sy = (camSy − wy)·ppu + innerHeight/2`.
+- Канвас `#game-canvas` — на нём висит ВЕСЬ мышиный ввод (`input.ts`: pointerdown+capture,
+  pointerenter, osиротевшие mouseup). WebGL-рендер обязан использовать ЭТОТ ЖЕ канвас
+  (THREE.WebGLRenderer({ canvas })), ничего поверх ввода не ставить.
+- `game.ts:2147 aimAngle()` — прицел: экранные `input.mouseX/mouseY` переводятся в мир
+  обратной формулой sx/sy (найти это место рядом с aimAngle). Этот пересчёт — единственная
+  логическая связка симуляции с камерой; её нужно завести в общий шов `screenToWorld`.
+- `game.ts:3150` — мост `__gameProbe` возвращает `{x, y: 0, z: −y}`; verify-game.mjs проверяет
+  «W → z уменьшается». Значит трёхмерное отображение мира: `(wx, wy) → (wx, 0, −wy)`.
+- `verify-game.mjs` (строки ~103–106 и ~178): проверка «кадр не чёрный» уже умеет ветку по типу
+  канваса; для WebGL чтения буфера нужен `preserveDrawingBuffer: true`.
+- `textures.ts`: `makeShipTexture/makeStationTexture/makePlanetTexture/makeStarTexture/
+  makeGlowTexture/makeNebulaTexture(mulberry32)` — Canvas2D-картинки; в three идут как
+  `THREE.CanvasTexture` без изменений. Корабельные текстуры «смотрят вверх».
+- `game.ts:41` — гейт `BRIDGES` (мосты только dev/build:test). Новый мост `__gl` — под тот же гейт.
+- `settings.ts` — `GameSettings {master, music, sfx}` (localStorage `game.settings`, НЕ SaveGame:
+  версия сейва не меняется). Здесь появится `render` — но в 12а достаточно моста для включения.
+- `perf.ts` — профилировщик секций кадра; new-секция «gl» впишется в него.
+
+### Реализация
+1. **Зависимости**: `npm i three` + `npm i -D @types/three`.
+2. **gl.ts**: класс `Renderer3D(canvas, sceneProvider)`: WebGLRenderer({canvas, antialias:true,
+   preserveDrawingBuffer:true}); OrthographicCamera с высотой видимого окна `innerHeight / ppu`
+   (паритет с 2D), позиция (camSx, 2600, −camSy), взгляд вниз; маппинг сущностей
+   (x, y)→(x, 0, −z). Пулы спрайтов (`THREE.Sprite`, `material.rotation` = угол 2D + поправка
+   «текстура смотрит вверх»): корабли, болты (из пула MAX_BOLTS), пикапы, станции/планеты,
+   звезда, туманности — все на CanvasTexture из существующих make*-функций (кэш текстур по canvas).
+   Метод `frame(view)` вызывается из игрового цикла вместо `renderFrame(c)` в 3D-режиме.
+3. **Режим**: поле `renderMode: "2d"|"3d"` в Game (12a: по умолчанию "2d" всегда; мост
+   `__gl.enable()` переключает на лету). В точке вызова renderFrame — ветка режима.
+4. **Шов координат**: у обоих бэкендов метод `screenToWorld(clientX, clientY) → {x, y}`
+   (2d — обратные sx/sy; 3d-орто — та же формула, в 12b заменится на raycast по плоскости).
+   Перевод прицела в районе `aimAngle()` вызывает шов, а не инлайн-формулу.
+5. **fx-слой**: флоатеры (₡-всплывашки), markers и warpFx в 3D-режиме пишутся на второй
+   канвас `#fx-canvas` (position:absolute поверх game-canvas, pointer-events:none, тот же
+   оверлей, что и HUD) — в 2D-режиме всё как раньше, одним канвасом.
+6. **Мост (BRIDGES)**: `__gl = { enable(), state: () => ({ mode, sprites, drawCalls, tris }) }`.
+7. **Зонд** `scripts/skin-test.mjs` + `preskin`/`skin` в package.json (паттерн intel-test.mjs):
+   `okGl` (режим 3d включился, sprites>0, drawCalls>0), `okAim` (screenToWorld: центр экрана →
+   camX/camY; смещение +100px вправо → camX + 100/ppu, допуск 0.5), `okNonBlack` (чтение буфера
+   WebGL-канваса ≠ чёрный), `okProbe2d` (после `__gl.enable()` координаты `__gameProbe()` по-прежнему
+   {x, 0, −y}), `okShots` (verification-shots/skin-play.png снят), `noPageErrors`.
+
+### Приёмка
+- `npm run check` чисто; `npm run skin` все флаги зелёные.
+- Регрессия 7/7 зелёная в режиме по умолчанию (2d): `npm run verify && npm run balance &&
+  npm run fleet && npm run focus && npm run smuggle && npm run loot && npm run watch`.
+- `npm run build` собирается; в прод-бандле нет ни `__gl`, ни `__sim` (гейт BRIDGES не тронут).
+- Ручная проверка в дев-консоли: `__gl.enable()` — та же сцена сверху, прицел/огонь/стыковка
+  работают, мышь не «теряется» (вшитый браузер с WebGL — проверить здесь же).
+- Симуляция не изменилась ни на байт логики: diff касается только render-слоя, gl.ts,
+  шва screenToWorld, input-бэкенда канваса (быть не должно), package.
+
+### Коммит
+`git add -A && git commit -m "Этап 12a: 2.5D-шуба — three.js WebGL-слой, орто-камера сверху, билборды на процедурных текстурах, шов screenToWorld"`
+и пометить 12a в PLAN.md как ✅ с датой.
