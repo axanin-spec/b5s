@@ -767,6 +767,44 @@ export function makeGlowTexture(rgb = "255,255,255"): HTMLCanvasElement {
   return toTexture(c);
 }
 
+/** Трассер болта (12c): софтовый белый «капелек» 128×16 — голова справа (u=1),
+ *  хвост гаснет по x, мягкая посадка по y; цвет докрашивается материалом. */
+export function makeStreakTexture(): HTMLCanvasElement {
+  const W = 128, H = 16;
+  const [c, ctx] = canvas(W, H);
+  const v = ctx.createLinearGradient(0, 0, 0, H);
+  v.addColorStop(0, "rgba(255,255,255,0)");
+  v.addColorStop(0.5, "rgba(255,255,255,1)");
+  v.addColorStop(1, "rgba(255,255,255,0)");
+  for (let x = 0; x < W; x++) {
+    const u = x / (W - 1);
+    ctx.globalAlpha = Math.pow(u, 1.5) * (0.25 + 0.75 * u);
+    ctx.fillStyle = v;
+    ctx.fillRect(x, 0, 1, H);
+  }
+  ctx.globalAlpha = 1;
+  return toTexture(c);
+}
+
+/** Ударная волна взрыва (12c): белое гауссово кольцо — пик яркости на 0.42 полуширины,
+ *  масштаб под радиус кольца задаёт GL-плейн, цвет — материал. */
+export function makeShockTexture(): HTMLCanvasElement {
+  const S = 128;
+  const [c, ctx] = canvas(S, S);
+  const C = S / 2, PEAK = S * 0.21, SIG = S * 0.045;
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = 1.4;
+  for (let r = 2; r < C; r += 1) {
+    const k = (r - PEAK) / SIG;
+    ctx.globalAlpha = Math.exp(-k * k);
+    ctx.beginPath();
+    ctx.arc(C, C, r, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  return toTexture(c);
+}
+
 export function makeNebulaTexture(seed: number, hueA: string, hueB: string): HTMLCanvasElement {
   const S = 512;
   const [c, ctx] = canvas(S, S);

@@ -23,6 +23,16 @@ const PALETTE = [
 ] as const;
 const PALETTE_TEX: HTMLCanvasElement[] = [];
 
+/** Те же цвета палитры плоским массивом [r,g,b,...] 0..1 — для GL-Parts (12c, точки-взрывы). */
+export const PALETTE_RGB: number[] = [];
+for (const hex of PALETTE) {
+  PALETTE_RGB.push(
+    parseInt(hex.slice(1, 3), 16) / 255,
+    parseInt(hex.slice(3, 5), 16) / 255,
+    parseInt(hex.slice(5, 7), 16) / 255,
+  );
+}
+
 export function paletteTex(): HTMLCanvasElement[] {
   if (PALETTE_TEX.length) return PALETTE_TEX;
   for (const hex of PALETTE) {
@@ -186,8 +196,9 @@ export function updateCamera(c: RenderCtx): void {
 }
 
 /** Фон: глубокий космос, параллакс, орбиты, тепловое кольцо — нижний холст в 3D-режиме.
- *  skipRings=true — в 3D орбиты/тепловое кольцо рисует GL (canvas-круги в наклоне не совпадают). */
-export function drawBackground(c: RenderCtx, ctx: CanvasRenderingContext2D, skipRings = false): void {
+ *  skipRings=true — в 3D орбиты/тепловое кольцо рисует GL (canvas-круги в наклоне не совпадают).
+ *  skipSky=true — в 3D звёзды/туманности рисует GL (Points-слои и additive-плоскости, 12c). */
+export function drawBackground(c: RenderCtx, ctx: CanvasRenderingContext2D, skipRings = false, skipSky = false): void {
   const W = window.innerWidth, H = window.innerHeight;
 
   // clear: subtle deep-space gradient instead of a flat fill
@@ -196,7 +207,7 @@ export function drawBackground(c: RenderCtx, ctx: CanvasRenderingContext2D, skip
 
   /* parallax layers: effective world pos = s - cam * f;
      tier 2 drops the nebula (f .3) and near-dust (f .7) layers — the two biggest blits */
-  for (const layer of c.layers) {
+  for (const layer of skipSky ? [] : c.layers) {
     if (c.quality >= 2 && layer.f >= 0.3) continue;
     const ox = c.camSx * layer.f, oy = c.camSy * layer.f;
     for (const star of layer.stars) {
@@ -582,11 +593,12 @@ export interface GlSink { frame(c: RenderCtx): void; project(wx: number, wy: num
 /** Тот же кадр в 3D-режиме (12a): фон на нижнем холсте, мир — GL-слоем,
  *  поверх — канвас ввода с прозрачным оверлеем (анимации кораблей ведёт GL).
  *  12b: после gl.frame камера пересчитана — её проекцией подменяются sx/sy,
- *  чтобы экранные обводки и стрелки совпадали с наклонным миром. */
+ *  чтобы экранные обводки и стрелки совпадали с наклонным миром.
+ *  12c: небо (звёзды/туманности) в 3D тоже уходит в GL — параллакс-слои Points. */
 export function renderGlFrame(c: RenderCtx, gl: GlSink, bgCtx: CanvasRenderingContext2D): void {
   updateCamera(c);
   perf.begin();
-  drawBackground(c, bgCtx, true);
+  drawBackground(c, bgCtx, true, true);
   gl.frame(c);
   c.project = (wx: number, wy: number) => gl.project(wx, wy);
   const ctx = c.ctx;

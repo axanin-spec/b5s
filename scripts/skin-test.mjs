@@ -11,7 +11,10 @@
  *  5. __gameProbe после переключения — прежний контракт {x, 0, −y};
  *  6. мышь живая: pointerdown по канвасу в 3d-режиме зажигает стрельбу (__input);
  *  7. скриншот verification-shots/skin-play.png снят;
- *  8. perf: EMA кадра <8 мс на реальном GPU (на SwiftShader/headless — только репорт).
+ *  8. perf: EMA кадра <8 мс на реальном GPU (на SwiftShader/headless — только репорт);
+ *  9. эффекты 12c: под зажатой ЛКМ летят трассеры (tracers>0); __sim.kill("pirate") →
+ *     Points-частицы взрыва (points>0) и ударное кольцо на грунте (shocks>0);
+ *  10. небо 12c: параллакс-звёзды собраны в Points-слои (stars>0).
  *
  * Использование: npm run preskin && npm run skin   (сервит dist/, как intel-test)
  */
@@ -141,8 +144,19 @@ await page.mouse.move(840, 360);
 await page.mouse.down();
 await page.waitForTimeout(700);
 const held = await page.evaluate(() => window.__input());
+// 12c: пока ЛКМ держат, болты в полёте — их трассеры живут в сцене
+const fx0 = await page.evaluate(() => window.__gl.state());
 await page.mouse.up();
 const okInput = held.mouseDown === true && held.shots > shots0;
+const okTracers = fx0.tracers > 0;
+
+// 12c: убийство пирата → взрыв: Points-частицы + ударное кольцо (скриншот ниже их поймает)
+const killAt = await page.evaluate(() => window.__sim.kill("pirate"));
+await page.waitForTimeout(250); // кольцо живёт 0.4 с — снимать в середине жизни
+const fx1 = await page.evaluate(() => window.__gl.state());
+const okFx = !!killAt && fx1.points > 0 && fx1.shocks > 0;
+// 12c: звёзды параллакса переехали в GL — слои Points построены
+const okSky = fx1.stars > 0;
 
 // ── 7. скриншот 3d-режима ──
 mkdirSync(join(ROOT, "verification-shots"), { recursive: true });
@@ -155,10 +169,12 @@ const okPerf = software ? true : st.ms < 8;
 
 await done({
   okGl, okLayers, okAim, okRound, okNonBlack, okProbe2d, okInput, okPerf, okShots,
+  okTracers, okFx, okSky,
   noPageErrors: pageErrors.length === 0,
 }, {
   layers: en.layers,
   glState: st,
+  fx: { tracers: fx0.tracers, killAt, points: fx1.points, shocks: fx1.shocks, stars: fx1.stars },
   softwareRaster: software,
   seam: {
     v: seam.v, center: seam.center, right: seam.right, up: seam.up,
