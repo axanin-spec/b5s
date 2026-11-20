@@ -2718,10 +2718,11 @@ export class Game {
 
   /**
    * Шов рендер-бэкендов: экранные пиксели (clientX/clientY) → мировые координаты.
-   * Орто-вид сверху у 2D и 3D общий (1 GL-единица = ppu px); в 12b ветка 3D
-   * станет raycast'ом по плоскости, вызовы это не тронут.
+   * 2D — орто-формула; 3D (12b) — raycast наклонной камеры по грунту y=0.
+   * Вызовы (прицел, путевые точки, skin-test) от ветки не зависят.
    */
   screenToWorld(px: number, py: number): { x: number; y: number } {
+    if (this.renderMode === "3d" && this.gl3d) return this.gl3d.screenToGround(px, py);
     return {
       x: this.camX + (px - window.innerWidth / 2) / this.ppu,
       y: this.camY - (py - window.innerHeight / 2) / this.ppu,
@@ -3216,6 +3217,12 @@ export class Game {
           targetedByPirate: this.ships.some((o, j) => j > 0 && o.active
             && (o.faction === "pirate" || o.faction === "boss") && o.targetIdx === i),
         })),
+      // телепорт игрока для probe-тестов кадров (12b: съёмка тела крупным планом)
+      tp: (x: number, y: number) => {
+        const p = this.ships[0];
+        p.x = x; p.y = y; p.vx = 0; p.vy = 0;
+        return true;
+      },
       dockAt: (id: string) => {
         const d = this.dockables.find((x) => x.isStation && (x.id === id || x.kind === id));
         if (!d) return false;
@@ -3250,7 +3257,11 @@ export class Game {
         ...(this.gl3d ? this.gl3d.info() : { sprites: 0, drawCalls: 0, tris: 0 }),
       }),
       s2w: (px: number, py: number) => this.screenToWorld(px, py),
-      view: () => ({ camX: this.camX, camY: this.camY, ppu: this.ppu }),
+      // 12b: перспективная проекция мир→экран (round-trip с s2w проверяет оба шва)
+      project: (wx: number, wy: number) =>
+        this.gl3d ? this.gl3d.project(wx, wy) : { x: 0, y: 0 },
+      bodies: () => this.gl3d?.bodiesDbg() ?? [],
+      view: () => ({ camX: this.camX, camY: this.camY, camSx: this.camSx, camSy: this.camSy, ppu: this.ppu }),
     };
   }
 

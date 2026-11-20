@@ -466,6 +466,48 @@ function windowRow(ctx: CanvasRenderingContext2D, x: number, y: number, n: numbe
  * tell an agri-hab from a refinery at a glance (hub ring, agri domes, asteroid mine,
  * factory decks, orbital lab).
  */
+/**
+ * 12b «шуба»: равнопромежуточная альбедо-карта планеты для three-сферы.
+ * Те же палитры, что у sprite-текстуры: широтные полосы + крапы, без блика
+ * (свет ляжет lambert-шейдингом от звезды).
+ */
+export function makePlanetAlbedo(kind: string, seed: number): HTMLCanvasElement {
+  const W = 256, H = 128;
+  const [c, ctx] = canvas(W, H);
+  const rnd = mulberry32(seed);
+  const [base, hi, low] = PLANET_PALETTES[kind] ?? PLANET_PALETTES.hub;
+  ctx.fillStyle = base;
+  ctx.fillRect(0, 0, W, H);
+  // latitude belts: wavy bands of hi/low tones
+  for (let y = 0; y < H; y += 7 + Math.floor(rnd() * 6)) {
+    ctx.fillStyle = rnd() > 0.5 ? hi : low;
+    ctx.globalAlpha = 0.18 + rnd() * 0.25;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    for (let x = 0; x <= W; x += 16) ctx.lineTo(x, y + Math.sin(x * 0.05 + y) * 4 + (rnd() - 0.5) * 3);
+    ctx.lineTo(W, y + 6 + rnd() * 8);
+    ctx.lineTo(0, y + 6 + rnd() * 8);
+    ctx.closePath();
+    ctx.fill();
+  }
+  // polar caps
+  ctx.globalAlpha = 0.6;
+  ctx.fillStyle = hi;
+  ctx.fillRect(0, 0, W, 10);
+  ctx.fillRect(0, H - 10, W, 10);
+  // landmass speckles
+  ctx.globalAlpha = 0.5;
+  for (let i = 0; i < 90; i++) {
+    ctx.fillStyle = rnd() > 0.5 ? hi : low;
+    const r = 2 + rnd() * 6;
+    ctx.beginPath();
+    ctx.arc(rnd() * W, rnd() * H, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  return c;
+}
+
 export function makeStationTexture(kind: StationKind = "hub", seed = 1): HTMLCanvasElement {
   const S = 256;
   const [c, ctx] = canvas(S, S);

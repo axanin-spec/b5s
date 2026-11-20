@@ -91,10 +91,31 @@ export interface RenderCtx {
   warpFx: number;
   starTex: HTMLCanvasElement;
   splashRemoved: boolean;
+  /** Мир → экранные css-пиксели. Пусто = орто-формулы sx/sy; в 3D-режиме renderGlFrame
+   *  подсовывает перспективную проекцию GL-камеры — аннотации/стрелки едут за миром. */
+  project?: ((wx: number, wy: number) => { x: number; y: number }) | null;
 }
 
 const sx = (c: RenderCtx, wx: number): number => (wx - c.camSx) * c.ppu + window.innerWidth / 2;
 const sy = (c: RenderCtx, wy: number): number => (c.camSy - wy) * c.ppu + window.innerHeight / 2;
+const pt = (c: RenderCtx, wx: number, wy: number): { x: number; y: number } =>
+  (c.project ? c.project(wx, wy) : { x: sx(c, wx), y: sy(c, wy) });
+
+/** Окружность радиуса r (метры) вокруг мировой точки как путь в текущем контексте.
+ *  В перспективе это эллипс: берём локальный базис (восток/север) и рисуем окружность
+ *  под аффинным transform — путь фиксируется CTM и после restore не «распрямляется».
+ *  Углы дуги — как у ctx.arc в 2D-режиме (паритет дуги налёта). */
+function circleWorld(c: RenderCtx, ctx: CanvasRenderingContext2D, wx: number, wy: number, r: number,
+  a0: number, a1: number): void {
+  const p0 = pt(c, wx, wy);
+  if (!c.project) { ctx.beginPath(); ctx.arc(p0.x, p0.y, r * c.ppu, a0, a1); return; }
+  const pe = pt(c, wx + r, wy), pn = pt(c, wx, wy + r);
+  ctx.save();
+  ctx.transform((pe.x - p0.x) / r, (pe.y - p0.y) / r, (pn.x - p0.x) / r, (pn.y - p0.y) / r, p0.x, p0.y);
+  ctx.beginPath();
+  ctx.arc(0, 0, 1, a0, a1);
+  ctx.restore();
+}
 
 /** Deep-space gradient lives per canvas context (a CanvasGradient is bound to its ctx):
  *  in 3D mode the background pass draws onto a second canvas, so cache by ctx. */
@@ -164,8 +185,9 @@ export function updateCamera(c: RenderCtx): void {
   c.gateSpin += 0.006;
 }
 
-/** Фон: глубокий космос, параллакс, орбиты, тепловое кольцо — нижний холст в 3D-режиме. */
-export function drawBackground(c: RenderCtx, ctx: CanvasRenderingContext2D): void {
+/** Фон: глубокий космос, параллакс, орбиты, тепловое кольцо — нижний холст в 3D-режиме.
+ *  skipRings=true — в 3D орбиты/тепловое кольцо рисует GL (canvas-круги в наклоне не совпадают). */
+export function drawBackground(c: RenderCtx, ctx: CanvasRenderingContext2D, skipRings = false): void {
   const W = window.innerWidth, H = window.innerHeight;
 
   // clear: subtle deep-space gradient instead of a flat fill
@@ -206,19 +228,19 @@ export function drawBackground(c: RenderCtx, ctx: CanvasRenderingContext2D): voi
 
   perf.mark("parallax");
 
-  /* orbit rings */
-  ctx.lineWidth = 1;
-  for (const d of c.dockables) {
-    const r = d.orbit * c.ppu;
-    const cx = sx(c, 0), cy = sy(c, 0);
-    if (cx + r < 0 || cx - r > W || cy + r < 0 || cy - r > H) continue;
-    ctx.strokeStyle = d.isStation ? "rgba(46,95,143,0.16)" : "rgba(42,74,102,0.24)";
-    ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, Math.PI * 2);
-    ctx.stroke();
-  }
-  // star heat ring
-  {
+  /* orbit rings (в 3D их рисует GL — эллипсы на грунте) */
+  if (!skipRings) {
+    ctx.lineWidth = 1;
+    for (const d of c.dockables) {
+      const r = d.orbit * c.ppu;
+      const cx = sx(c, 0), cy = sy(c, 0);
+      if (cx + r < 0 || cx - r > W || cy + r < 0 || cy - r > H) continue;
+      ctx.strokeStyle = d.isStation ? "rgba(46,95,143,0.16)" : "rgba(42,74,102,0.24)";
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    // star heat ring
     const r = WORLD_CFG.STAR_HEAT_RADIUS * c.ppu;
     const cx = sx(c, 0), cy = sy(c, 0);
     ctx.strokeStyle = "rgba(255,84,51,0.3)";
@@ -367,11 +389,9 @@ export function drawAnnotations(c: RenderCtx, ctx: CanvasRenderingContext2D): vo
   /* docking range hint for the current target */
   if (c.dockTarget && st === "playing") {
     const scale = bodySizePx(c.dockTarget, c.ppu);
-    const x = sx(c, c.dockTarget.x), y = sy(c, c.dockTarget.y);
     ctx.strokeStyle = "rgba(84,255,210,0.55)";
     ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(x, y, scale / 2 + 10, 0, Math.PI * 2);
+    circleWorld(c, ctx, c.dockTarget.x, c.dockTarget.y, (scale / 2 + 10) / c.ppu, 0, Math.PI * 2);
     ctx.stroke();
   }
   /* raid heist: an orange arc closing over the storehouse being emptied (5d) */
@@ -379,19 +399,18 @@ export function drawAnnotations(c: RenderCtx, ctx: CanvasRenderingContext2D): vo
     const d = c.dockables.find((x) => x.id === c.grabTarget);
     if (d) {
       const scale = bodySizePx(d, c.ppu);
-      const x = sx(c, d.x), y = sy(c, d.y);
       const frac = Math.max(0, Math.min(1, c.grabT / RAID.GRAB_TIME));
       ctx.strokeStyle = "#ff9a3a";
       ctx.lineWidth = 4;
-      ctx.beginPath();
-      ctx.arc(x, y, scale / 2 + 16, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2);
+      circleWorld(c, ctx, d.x, d.y, (scale / 2 + 16) / c.ppu, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2);
       ctx.stroke();
     }
   }
   /* gate labels + jump hint */
   const gScale = gateSizePx(c.ppu);
   for (const g of c.gates) {
-    const x = sx(c, g.x), y = sy(c, g.y);
+    const p = pt(c, g.x, g.y);
+    const x = p.x, y = p.y;
     if (x + gScale < 0 || x - gScale > W || y + gScale < 0 || y - gScale > H) continue;
     ctx.font = `${Math.max(11, Math.round(14 * c.ppu))}px ui-sans-serif, system-ui, sans-serif`;
     ctx.textAlign = "center";
@@ -400,21 +419,20 @@ export function drawAnnotations(c: RenderCtx, ctx: CanvasRenderingContext2D): vo
     if (c.jumpGate === g && st === "playing") {
       ctx.strokeStyle = "rgba(84,255,210,0.55)";
       ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(x, y, gScale / 2 + 10, 0, Math.PI * 2);
+      circleWorld(c, ctx, g.x, g.y, (gScale / 2 + 10) / c.ppu, 0, Math.PI * 2);
       ctx.stroke();
     }
   }
   for (let i = 0; i < c.ships.length; i++) {
     const s = c.ships[i];
     if (!s.active) continue;
-    const x = sx(c, s.x), y = sy(c, s.y);
+    const p = pt(c, s.x, s.y);
+    const x = p.x, y = p.y;
     /* shield ring flash after recent hits */
     if (s.shield > 0 && s.sinceHit < 0.35) {
       ctx.strokeStyle = `rgba(111,195,255,${0.7 - s.sinceHit * 2})`;
       ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(x, y, s.radius * c.ppu + 6, 0, Math.PI * 2);
+      circleWorld(c, ctx, s.x, s.y, s.radius + 6 / c.ppu, 0, Math.PI * 2);
       ctx.stroke();
     }
     /* pirate status (5f): dashed kin rings — blue around the raiders, hostile red around patrol */
@@ -422,8 +440,7 @@ export function drawAnnotations(c: RenderCtx, ctx: CanvasRenderingContext2D): vo
       ctx.strokeStyle = s.faction === "pirate" ? "rgba(90,159,255,0.45)" : "rgba(255,90,74,0.45)";
       ctx.lineWidth = 2;
       ctx.setLineDash([7, 7]);
-      ctx.beginPath();
-      ctx.arc(x, y, s.radius * c.ppu + 10, 0, Math.PI * 2);
+      circleWorld(c, ctx, s.x, s.y, s.radius + 10 / c.ppu, 0, Math.PI * 2);
       ctx.stroke();
       ctx.setLineDash([]);
     }
@@ -437,7 +454,8 @@ export function drawOverlay(c: RenderCtx, ctx: CanvasRenderingContext2D): void {
 
   /* plotted course: diamond over the target, or a compass arrow pinned to the screen edge */
   if (c.waypoint && st === "playing") {
-    const wx = sx(c, c.waypoint.x), wy = sy(c, c.waypoint.y);
+    const wp = pt(c, c.waypoint.x, c.waypoint.y);
+    const wx = wp.x, wy = wp.y;
     const margin = 46;
     const onScreen = wx > margin && wx < W - margin && wy > margin && wy < H - margin;
     ctx.save();
@@ -451,7 +469,8 @@ export function drawOverlay(c: RenderCtx, ctx: CanvasRenderingContext2D): void {
       ctx.strokeRect(-9, -9, 18, 18);
     } else {
       const ps = c.ships[0];
-      const px = sx(c, ps.x), py = sy(c, ps.y);
+      const pp = pt(c, ps.x, ps.y);
+      const px = pp.x, py = pp.y;
       const a = Math.atan2(wy - py, wx - px);
       const dx = Math.cos(a), dy = Math.sin(a);
       let tt = 4000;
@@ -498,7 +517,8 @@ export function drawOverlay(c: RenderCtx, ctx: CanvasRenderingContext2D): void {
       const k = f.t / f.ttl;
       ctx.globalAlpha = k < 0.6 ? 1 : Math.max(0, 1 - (k - 0.6) / 0.4);
       ctx.font = `${f.big ? 800 : 700} ${Math.round((f.big ? 17 : 13) * c.ppu)}px ui-monospace, Consolas, monospace`;
-      const fx = sx(c, f.x), fy = sy(c, f.y) - k * 46 * c.ppu;
+      const fp = pt(c, f.x, f.y);
+      const fx = fp.x, fy = fp.y - k * 46 * c.ppu;
       ctx.lineWidth = 3;
       ctx.strokeStyle = "rgba(2,6,14,0.9)";
       ctx.strokeText(f.text, fx, fy);
@@ -555,19 +575,24 @@ export function renderFrame(c: RenderCtx): void {
   finishFrame(c);
 }
 
-/** Стоянок GL-бэкенда (gl.ts): рисует проходы тел/сущностей вместо canvas-слоёв. */
-export interface GlSink { frame(c: RenderCtx): void }
+/** Стоянок GL-бэкенда (gl.ts): рисует проходы тел/сущностей вместо canvas-слоёв
+ *  и отдаёт перспективную проекцию мира на экран (для аннотаций/оверлеев). */
+export interface GlSink { frame(c: RenderCtx): void; project(wx: number, wy: number): { x: number; y: number } }
 
 /** Тот же кадр в 3D-режиме (12a): фон на нижнем холсте, мир — GL-слоем,
- *  поверх — канвас ввода с прозрачным оверлеем (анимации кораблей ведёт GL). */
+ *  поверх — канвас ввода с прозрачным оверлеем (анимации кораблей ведёт GL).
+ *  12b: после gl.frame камера пересчитана — её проекцией подменяются sx/sy,
+ *  чтобы экранные обводки и стрелки совпадали с наклонным миром. */
 export function renderGlFrame(c: RenderCtx, gl: GlSink, bgCtx: CanvasRenderingContext2D): void {
   updateCamera(c);
   perf.begin();
-  drawBackground(c, bgCtx);
+  drawBackground(c, bgCtx, true);
   gl.frame(c);
+  c.project = (wx: number, wy: number) => gl.project(wx, wy);
   const ctx = c.ctx;
   ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
   drawAnnotations(c, ctx);
   drawOverlay(c, ctx);
+  c.project = null;
   finishFrame(c);
 }

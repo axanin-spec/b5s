@@ -1,14 +1,17 @@
 /**
- * skin-test.mjs — автотест WebGL-«шубы» (Этап 12a): three-скелет под той же симуляцией.
- * Орто-камера сверху, канвас ввода не тронут, фон — нижний 2D-холст. Проверяет:
+ * skin-test.mjs — автотест WebGL-«шубы» (Этап 12b): перспективная камера 45° под
+ * той же симуляцией, объёмные тела; канвас ввода не тронут, фон — нижний 2D-холст.
+ * Проверяет:
  *  1. __gl.enable(): режим 3d включился, спрайты и draw calls ненулевые;
  *  2. слои DOM: #bg-canvas → #gl-canvas → #game-canvas (ввод остаётся верхним);
- *  3. шов screenToWorld: центр экрана → camX/camY; +100px → +100/ppu; вверх экрана
- *     → +y мир (орто-формула одинакова в обоих режимах, допуск 0.5);
+ *  3. шов screenToWorld в наклоне: центр экрана → camX/camY (±1), вправо экрана →
+ *     +x мира (Δ>20), вверх экрана → +y мира (Δ>20) — знаки важнее точности орто-меры;
+ *  3b. round-trip project→s2w: мир→экран→мир сходится с допуском 1 (оба шва разом);
  *  4. GL-канвас не чёрный (preserveDrawingBuffer → чтение пикселей);
  *  5. __gameProbe после переключения — прежний контракт {x, 0, −y};
  *  6. мышь живая: pointerdown по канвасу в 3d-режиме зажигает стрельбу (__input);
- *  7. скриншот verification-shots/skin-play.png снят.
+ *  7. скриншот verification-shots/skin-play.png снят;
+ *  8. perf: EMA кадра <8 мс на реальном GPU (на SwiftShader/headless — только репорт).
  *
  * Использование: npm run preskin && npm run skin   (сервит dist/, как intel-test)
  */
@@ -88,22 +91,28 @@ const okGl = en.r === true && st.mode === "3d" && st.sprites > 0 && st.drawCalls
 const okLayers = en.layers.length === 3 && en.layers[0] === "bg-canvas"
   && en.layers[1] === "gl-canvas" && en.layers[2] === "game-canvas";
 
-// ── 3. шов screenToWorld (тот же в обоих режимах) ──
+// ── 3. шов screenToWorld в наклоне: центр точен, знаки осей соблюдены ──
+// фокус камеры = camSx/camSy (camX+тряска), не camX/camY — тряска не должна валить допуск
 const seam = await page.evaluate(() => {
   const v = window.__gl.view();
   const cx = window.innerWidth / 2, cy = window.innerHeight / 2;
+  const w = { x: v.camX + 300, y: v.camY - 200 }; // правее-ближе камеры
+  const p = window.__gl.project(w.x, w.y);
   return {
     v,
     center: window.__gl.s2w(cx, cy),
     right: window.__gl.s2w(cx + 100, cy),
     up: window.__gl.s2w(cx, cy - 100),
+    rt: { w, p, back: window.__gl.s2w(p.x, p.y) },
   };
 });
-const near = (a, b) => Math.abs(a - b) < 0.5;
-const px2world = 100 / seam.v.ppu;
-const okAim = near(seam.center.x, seam.v.camX) && near(seam.center.y, seam.v.camY)
-  && near(seam.right.x, seam.v.camX + px2world) && near(seam.right.y, seam.v.camY)
-  && near(seam.up.x, seam.v.camX) && near(seam.up.y, seam.v.camY + px2world);
+const near = (a, b, eps) => Math.abs(a - b) < eps;
+// в наклоне 45° экран «вверх» = «дальше от камеры» = +y мира; вправо экрана = +x
+const okAim = near(seam.center.x, seam.v.camSx, 1) && near(seam.center.y, seam.v.camSy, 1)
+  && seam.right.x - seam.center.x > 20 && Math.abs(seam.right.y - seam.center.y) < 20
+  && seam.up.y - seam.center.y > 20;
+// 3b. проект↔рейкаст — взаимные обратные: мир→экран→мир без расхождения
+const okRound = near(seam.rt.back.x, seam.rt.w.x, 1) && near(seam.rt.back.y, seam.rt.w.y, 1);
 
 // ── 4. GL-канвас не чёрный (копируем WebGL-канвас во временный 2D и считаем пиксели) ──
 const nonBlack = await page.evaluate(() => {
@@ -140,13 +149,21 @@ mkdirSync(join(ROOT, "verification-shots"), { recursive: true });
 await page.screenshot({ path: join(ROOT, "verification-shots", "skin-play.png") });
 const okShots = existsSync(join(ROOT, "verification-shots", "skin-play.png"));
 
+// ── 8. perf: EMA рендера <8 мс на реальном GPU; программный растер/скрытый GPU — репорт ──
+const software = /swiftshader|llvmpipe|software/i.test(st.gpu || "") || st.gpu === "unknown";
+const okPerf = software ? true : st.ms < 8;
+
 await done({
-  okGl, okLayers, okAim, okNonBlack, okProbe2d, okInput, okShots,
+  okGl, okLayers, okAim, okRound, okNonBlack, okProbe2d, okInput, okPerf, okShots,
   noPageErrors: pageErrors.length === 0,
 }, {
   layers: en.layers,
   glState: st,
-  seam: { v: seam.v, center: seam.center, right: seam.right, up: seam.up, px2world },
+  softwareRaster: software,
+  seam: {
+    v: seam.v, center: seam.center, right: seam.right, up: seam.up,
+    roundtrip: seam.rt,
+  },
   probe: { before: g0, after: g1 },
   litPx: nonBlack.lit,
   shots: [shots0, held.shots],
