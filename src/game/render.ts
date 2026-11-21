@@ -54,11 +54,17 @@ export const gatePulse = (gateSpin: number): number => 1 + 0.055 * Math.sin(gate
 interface RingFx { life: number; maxLife: number; x: number; y: number; r: number; vr: number; hot: boolean }
 interface Floater { x: number; y: number; t: number; ttl: number; text: string; c: string; big: boolean }
 
+/** Чужой корабль общего шара (15b): метры игрового мира, текстура уже подкрашена
+ *  в оттенок позывного; список собирает game.ts из worldNet перед каждым кадром. */
+export interface RemoteBlip { x: number; y: number; a: number; radius: number; tex: HTMLCanvasElement; name: string; hue: number }
+
 /** Структурный хозяин кадра: камера, текстуры, пулы сущностей, флаги качества. */
 export interface RenderCtx {
   ctx: CanvasRenderingContext2D;
   sm: { state: string };
   ships: Ship[];
+  /** Чужие корабли общего шара (15b, трек Б): рисуются следом за своими. */
+  remotes: RemoteBlip[];
   rnd(): number;
   isPirate(): boolean;
   setQuality(q: number): void;
@@ -347,6 +353,20 @@ export function drawEntities(c: RenderCtx, ctx: CanvasRenderingContext2D): void 
     ctx.restore();
   }
 
+  /* Чужие корабли шарда (15b): те же билборды, силуэт выбранного корпуса,
+   * краска — оттенок позывного; список уже отфильтрован по системе и живости. */
+  for (const r of c.remotes) {
+    const scale = r.radius * SHIP_SCALE * c.ppu;
+    const x = sx(c, r.x), y = sy(c, r.y);
+    if (x + scale / 2 < 0 || x - scale / 2 > W || y + scale / 2 < 0 || y - scale / 2 > H) continue;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(Math.PI / 2 - r.a); // та же посадка угла, что у своих кораблей
+    ctx.globalAlpha = 0.95;
+    ctx.drawImage(r.tex, -scale / 2, -scale / 2, scale, scale);
+    ctx.restore();
+  }
+
   /* bolts */
   for (const b of c.bolts) {
     if (!b.active) continue;
@@ -398,6 +418,20 @@ export function drawEntities(c: RenderCtx, ctx: CanvasRenderingContext2D): void 
 export function drawAnnotations(c: RenderCtx, ctx: CanvasRenderingContext2D): void {
   const st = c.sm.state;
   const W = window.innerWidth, H = window.innerHeight;
+
+  /** Позывной над кораблём (15b): подпись с тёмной обводкой, за бортом спрайта.
+   *  Общий проход обоих рендеров — аннотации идут и в 2D, и на канвасе ввода в GL. */
+  const callsign = (x: number, y: number, radius: number, text: string, color: string): void => {
+    const ly = y - (radius * SHIP_SCALE * c.ppu) / 2 - 10 * c.ppu;
+    if (x < -80 || x > W + 80 || ly < -24 || ly > H + 24) return;
+    ctx.font = `600 ${Math.max(11, Math.round(12.5 * c.ppu))}px ui-sans-serif, system-ui, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "rgba(4,8,14,0.85)";
+    ctx.strokeText(text, x, ly);
+    ctx.fillStyle = color;
+    ctx.fillText(text, x, ly);
+  };
 
   /* docking range hint for the current target */
   if (c.dockTarget && st === "playing") {
@@ -477,6 +511,16 @@ export function drawAnnotations(c: RenderCtx, ctx: CanvasRenderingContext2D): vo
         circleWorld(c, ctx, t.x, t.y, t.radius + 14 / c.ppu, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2);
         ctx.stroke();
       }
+    }
+    /* позывные NPC (15b): торговцы, контрабандисты, «Варта» — приглушённо,
+     * чтобы не спорили с маркерами целей; безымянные катера не подписываем */
+    if (st === "playing" && i !== 0 && s.name) callsign(x, y, s.radius, s.name, "rgba(200,216,228,0.7)");
+  }
+  /* позывные игроков шарда (15b): цвет = оттенок позывного, как у самого корпуса */
+  if (st === "playing") {
+    for (const r of c.remotes) {
+      const p = pt(c, r.x, r.y);
+      callsign(p.x, p.y, r.radius, r.name, `hsl(${r.hue} 90% 65%)`);
     }
   }
 }

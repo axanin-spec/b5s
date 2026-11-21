@@ -16,6 +16,7 @@ import * as econ from "./economy";
 import * as fleet from "./fleet";
 import * as missions from "./missions";
 import { renderFrame, renderGlFrame, paletteTex } from "./render";
+import type { RemoteBlip } from "./render";
 import type { Renderer3D } from "./gl"; // 12d: только тип — three уезжает в async-чанк (dynamic import)
 import { loadSettings, onSettingsChange, type RenderPref } from "./settings";
 import { GameLoop } from "./engine";
@@ -25,8 +26,9 @@ import { GameStateMachine } from "./state";
 import {
   makeCargoTexture, makeCreditTexture, makeGateFrameTexture, makeGateHorizonTexture, makeGlowTexture, makeNebulaTexture,
   makePlanetTexture, makeShipTexture, makeStarTexture, makeStationTexture,
-  mulberry32,
+  mulberry32, remoteHue, remoteShipColors,
 } from "./textures";
+import { worldNet } from "../net/world";
 import type { SystemDef } from "./config";
 import { loadImage, loadPlanetTexture, loadStationTexture, planetVariant } from "./assets";
 import { basePriceOf, economyTick, findDockTarget, generateWorld, kindName, priceOf, refreshAllPrices, updateOrbits } from "./world";
@@ -150,6 +152,13 @@ export class Game {
   private ringCursor = 0;
   /** Rising credit popups over the world (game feel): spawned on income/spend, drawn in screen space. */
   floaters: { x: number; y: number; t: number; ttl: number; text: string; c: string; big: boolean }[] = [];
+  /** Чужие корабли общего шара (15b, трек Б): собираются из worldNet перед кадром,
+   *  рисуют render.ts/gl.ts; нормализованные координаты шарда уже пересчитаны в метры. */
+  remotes: RemoteBlip[] = []; // public: render.ts
+  /** Текстуры чужих корпусов: ключ «индексHULLS|hue», живут, пока живёт игра. */
+  private remoteTexCache = new Map<string, HTMLCanvasElement>();
+  /** Раздатчик своего state в шард: 10 Гц (интервал worldNet тот же). */
+  private netT = 0;
   /** Kill/event feed lines for the HUD column (game feel); they age out with the player clock. */
   private feed: { id: number; text: string; cls: "info" | "gold" | "bad"; t: number }[] = [];
   private feedId = 1;
@@ -1475,6 +1484,40 @@ export class Game {
     })];
   }
 
+  /** Чужие корпуса шарда (15b): силуэт HULLS[индекс], краска — оттенок позывного.
+   *  Модули не рисуем: чужая обвеска на клиенте неизвестна. */
+  private remoteTex(hullIdx: number, hue: number): HTMLCanvasElement {
+    const key = `${hullIdx}|${hue}`;
+    let t = this.remoteTexCache.get(key);
+    if (!t) {
+      t = makeShipTexture("player", hullIdx, undefined, remoteShipColors(hue));
+      this.remoteTexCache.set(key, t);
+    }
+    return t;
+  }
+
+  /** Сбор ростера к кадру (15b): только живые чужие игроки нашей системы; координаты
+   *  шарда нормализованы — обратно в метры через ×HALF (зеркало getPlayerHeading). */
+  private syncRemotes(): void {
+    const out: RemoteBlip[] = [];
+    if (worldNet.status === "online") {
+      const sys = this.systemDef.name;
+      for (const pl of worldNet.players.values()) {
+        if (pl.dead || pl.id === worldNet.selfId) continue;
+        const s = pl.state;
+        if (!s || (s.sys && s.sys !== sys)) continue;
+        const hullIdx = Math.max(0, HULLS.findIndex((h) => h.id === s.hull));
+        const hue = remoteHue(pl.username);
+        out.push({
+          x: s.x * WORLD_CFG.HALF, y: s.y * WORLD_CFG.HALF, a: s.a,
+          radius: HULLS[hullIdx].radius, tex: this.remoteTex(hullIdx, hue),
+          name: pl.username, hue,
+        });
+      }
+    }
+    this.remotes = out;
+  }
+
   /* ================================================================== */
   /* Game flow: new / continue / save / load / game over / victory       */
   /* ================================================================== */
@@ -2206,6 +2249,21 @@ export class Game {
   private update(dt: number): void {
     if (this.disposed) return;
     const st = this.sm.state;
+
+    /* общий шар (15b, трек Б): свой state 10 Гц — полный, с системой и корпусом.
+     * Координаты нормализованы (/HALF) — тот же тракт, что у getPlayerHeading.
+     * В title/gameover/victory не шлём: там корабля «в мире» нет. */
+    this.netT -= dt;
+    if (this.netT <= 0) {
+      this.netT = 0.1;
+      if (st === "playing" || st === "paused" || st === "docked") {
+        const me = this.ships[0];
+        worldNet.setState({
+          x: me.x / WORLD_CFG.HALF, y: me.y / WORLD_CFG.HALF, a: me.angle,
+          sys: this.systemDef.name, hull: this.player.ship,
+        });
+      }
+    }
 
     // global keys that work outside of `playing`
     if (st === "title") {
@@ -3179,6 +3237,7 @@ export class Game {
   private unsubRender: (() => void) | null = null;
 
   private render(): void {
+    this.syncRemotes();
     if (this.renderMode === "3d" && this.gl3d && this.bgCtx) renderGlFrame(this, this.gl3d, this.bgCtx);
     else renderFrame(this);
   }
@@ -3593,6 +3652,8 @@ export class Game {
         const p = this.ships[0];
         return { x: p.x / WORLD_CFG.HALF, y: p.y / WORLD_CFG.HALF, a: p.angle };
       },
+      // 15b (трек Б): игра сама рисует чужие корпуса и позывные — DOM-оверлею молчать
+      drawsNetRemotes: () => true,
       toggleMap: () => this.toggleMap(),
       closeMap: () => this.closeMap(),
       setWaypoint: (kind, id) => this.setWaypoint(kind, id),
@@ -3763,6 +3824,31 @@ export class Game {
         if (!HULLS.some((h) => h.id === id)) return null;
         this.setShip(id as HullId);
         return this.player.ship;
+      },
+      // общий шар (15b, трек Б): ростер, собранный игрой к кадру, + наш исходящий state
+      net: () => ({
+        status: worldNet.status,
+        selfId: worldNet.selfId,
+        sys: this.systemDef.name,
+        hull: this.player.ship,
+        remotes: this.remotes.map((r) => ({
+          name: r.name, hue: r.hue, radius: r.radius,
+          x: Math.round(r.x), y: Math.round(r.y), a: Math.round(r.a * 100) / 100,
+        })),
+      }),
+      // отладочный ростер (net-test): подсовывает worldNet чужих игроков без сервера
+      fakePlayers: (arr: { id: string; username: string; x: number; y: number; a: number; sys?: string; hull?: string; dead?: boolean }[] | null, selfId?: string) => {
+        if (arr === null) return { count: worldNet.players.size };
+        worldNet.status = "online";
+        worldNet.selfId = selfId ?? "self-test";
+        worldNet.players.clear();
+        for (const p of arr) {
+          worldNet.players.set(p.id, {
+            id: p.id, username: p.username, dead: p.dead,
+            state: { x: p.x, y: p.y, a: p.a, sys: p.sys, hull: p.hull },
+          });
+        }
+        return { count: worldNet.players.size };
       },
       give: (itemId: string) => {
         if (!EQUIP[itemId]) return false;

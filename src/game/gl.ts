@@ -516,6 +516,14 @@ export class Renderer3D {
       this.put("ship", i, s.x, s.y, s.radius * SHIP_SCALE * c.ppu * (1 + 0.18 * hk),
         this.tex(texs[texs.length > 1 ? i & 1 : 0]), rho - Math.PI / 2, 1, false, hk);
     }
+    // чужие корабли шарда (15b): продолжение пула «ship», текстуры кэширует game.ts —
+    // tex() (WeakMap по canvas) переиспользует CanvasTexture без переливки
+    for (let j = 0; j < c.remotes.length; j++) {
+      const r = c.remotes[j];
+      const rho = Math.atan2(Math.sin(r.a) * sinP, Math.cos(r.a));
+      this.put("ship", c.ships.length + j, r.x, r.y, r.radius * SHIP_SCALE * c.ppu,
+        this.tex(r.tex), rho - Math.PI / 2, 0.95, false);
+    }
 
     // болты + трассеры 12c: аддитивная полоса на грунте назад по направлению полёта
     let b = 0, tpn = 0, ten = 0;

@@ -246,6 +246,9 @@ export interface GameApi {
   /** Minimap blips: x/y normalized to [-1,1], color css, size px, o=1 → objective diamond, w=1 → waypoint ring. */
   getMinimap(): { x: number; y: number; c: string; s: number; o?: 1; w?: 1 }[];
   getPlayerHeading(): { x: number; y: number; a: number };
+  /** Общий шар (15b, трек Б): true — игра рисует чужие корабли и позывные своим
+   *  рендером (game.ts/gl.ts); DOM-оверлей net/overlay.ts тогда не дублирует. */
+  drawsNetRemotes(): boolean;
   /** Star chart toggle (M key / HUD button). */
   toggleMap(): void;
   closeMap(): void;

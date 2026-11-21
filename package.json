@@ -34,7 +34,9 @@
     "preinspect": "npm run build:test",
     "inspect": "node scripts/inspect-test.mjs",
     "prettl": "npm run build:test",
-    "ttl": "node scripts/ttl-test.mjs"
+    "ttl": "node scripts/ttl-test.mjs",
+    "prenet": "npm run build:test",
+    "net": "node scripts/net-test.mjs"
   },
   "dependencies": {
     "react": "^19.2.0",

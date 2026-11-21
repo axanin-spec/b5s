@@ -70,7 +70,10 @@ export type ShipStyle = "player" | "pirate" | "patrol" | "trader" | "boss" | "cr
  */
 export interface ShipUpgrades { hull: number; weapon: number; weaponRank: number; shield: number; engine: number }
 
-const SHIP_COLORS: Record<ShipStyle, { hull: string; trim: string; glow: string; cockpit: string }> = {
+/** Краска корпуса для makeShipTexture: по умолчанию берётся из фракционной таблицы. */
+export interface ShipColors { hull: string; trim: string; glow: string; cockpit: string }
+
+const SHIP_COLORS: Record<ShipStyle, ShipColors> = {
   player: { hull: "#9fe8d0", trim: "#2e8f74", glow: "#54ffd2", cockpit: "#eafff8" },
   pirate: { hull: "#e06a5a", trim: "#7e2a20", glow: "#ff9c54", cockpit: "#ffd9c9" },
   patrol: { hull: "#7fb4ff", trim: "#2b4f8f", glow: "#7fd0ff", cockpit: "#eaf4ff" },
@@ -80,6 +83,35 @@ const SHIP_COLORS: Record<ShipStyle, { hull: string; trim: string; glow: string;
 };
 
 const STYLE_SEED: Record<ShipStyle, number> = { player: 11, pirate: 23, patrol: 37, trader: 53, boss: 71, cruiser: 97 };
+
+/** Хэш позывного → тон 0..359 (15b): цвет чужого корабля и его подписи.
+ *  Тот же алгоритм, что hueFor в net/overlay.ts — метка и корпус звучат вместе. */
+export function remoteHue(name: string): number {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  return h % 360;
+}
+
+/** hsl → #rrggbb: shade()/hexA() понимают только hex, поэтому краску конвертируем сразу. */
+function hslHex(h: number, s: number, l: number): string {
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => {
+    const k = (n + h / 30) % 12;
+    const v = l - a * Math.max(-1, Math.min(k - 3, Math.min(9 - k, 1)));
+    return Math.round(255 * v).toString(16).padStart(2, "0");
+  };
+  return `#${f(0)}${f(8)}${f(4)}`;
+}
+
+/** Краска чужого корпуса (15b): силуэт игрока, оттенок — по позывному. */
+export function remoteShipColors(hue: number): ShipColors {
+  return {
+    hull: hslHex(hue, 0.45, 0.6),
+    trim: hslHex(hue, 0.5, 0.22),
+    glow: hslHex(hue, 0.9, 0.65),
+    cockpit: hslHex(hue, 0.55, 0.92),
+  };
+}
 
 /** Class silhouettes in a 128-unit space, nose at −y; for "player" the variant is the HULLS index. */
 function shipBody(style: ShipStyle, variant = 0): Path2D {
@@ -150,10 +182,12 @@ function playerBody(hull: number): Path2D {
   return b;
 }
 
-export function makeShipTexture(style: ShipStyle, variant = 0, up?: ShipUpgrades): HTMLCanvasElement {
+/** colors — подмена палитры (15b: чужие корабли шарда красятся по позывному),
+ *  по умолчанию — фракционная. up для чужих не передаётся: их снаряжение не знаем. */
+export function makeShipTexture(style: ShipStyle, variant = 0, up?: ShipUpgrades, colors?: ShipColors): HTMLCanvasElement {
   const s = style === "boss" ? 256 : 128;
   const [c, ctx] = canvas(s, s);
-  const col = SHIP_COLORS[style];
+  const col = colors ?? SHIP_COLORS[style];
   const u = s / 128; // unit scale
   ctx.translate(s / 2, s / 2);
   ctx.scale(u, u);

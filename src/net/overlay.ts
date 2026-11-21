@@ -47,6 +47,10 @@ export function startNetOverlay(root: HTMLElement): () => void {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
 
+    // 15b (трек Б): игра сама рисует чужие корпуса и позывные своим рендером —
+    // оверлей погашен, чтобы не плодить шевроны и двойные подписи поверх мира.
+    if (gameApi.current?.drawsNetRemotes?.()) return;
+
     const snap = uiBridge.getSnapshot();
     if (snap.screen !== "playing" && snap.screen !== "paused") return;
     const me = gameApi.current?.getPlayerHeading();
