@@ -18,6 +18,17 @@
  *                    { t: "hit", id, from, dmg, hp }       (id — цель, hp — оценка)
  *                    { t: "kill", id, by }                 (смерть игрока id от by)
  *                    { t: "respawn", id }                  (игрок вернулся в строй)
+ *
+ * Торговля игрок↔игрок (15c, эскроу через ledger):
+ *   клиент → сервер: { t: "trade_offer", id, to, giveCredits, wantCredits,
+ *                      giveGoods?, wantGoods? }  — TTL 60 с, дистанция ≤ 1500
+ *                    { t: "trade_accept", id } | { t: "trade_decline", id } |
+ *                    { t: "trade_cancel", id } (инициатор)
+ *   сервер → клиент: { t: "trade_offer", id, from, fromName, ... }  (адресату)
+ *                    { t: "trade_done", id, ... }   (обоим; товары переходят
+ *                                                   на клиентах, кредиты — ledger)
+ *                    { t: "trade_fail", id, reason } | { t: "trade_declined", id } |
+ *                    { t: "trade_cancelled", id }
  */
 
 import { readFile, rename, writeFile, mkdir } from "node:fs/promises";
@@ -36,6 +47,11 @@ const HIT_RATE_MAX = 30; // не более 30 попаданий за 10 с н�
 const DEFAULT_HP = 100;
 const KILLS_LOG_MAX = 50;
 
+// --- торговля игрок↔игрок (15c) ---
+const TRADE_TTL_MS = 60_000;
+const TRADE_MAX_RANGE = 1500; // мир. единицы — «стыковочная» дистанция
+const TRADE_MAX_PENDING_PER_PLAYER = 10;
+
 const DEFAULT_WORLD = () => ({
   registered: 0,
   pools: { patrol: 0, alliance: 0, clan: 0, stations: 0 },
@@ -44,10 +60,12 @@ const DEFAULT_WORLD = () => ({
   updatedAt: 0,
 });
 
-export function createWorld(dataDir) {
+export function createWorld(dataDir, ledger) {
   const worldFile = path.join(dataDir, "world.json");
   /** @type {Map<string, {id, username, conn, state, lastRelay, dead, estHp, hitTimes}>} */
   const players = new Map();
+  /** Активные торговые офферы (в памяти; рестарт = отмена незавершённых). */
+  const trades = new Map();
   let world = DEFAULT_WORLD();
   let writeChain = Promise.resolve();
 
@@ -175,6 +193,118 @@ export function createWorld(dataDir) {
     }
   }
 
+  // ---------- торговля игрок↔игрок (15c) ----------
+
+  function sweepTrades() {
+    const now = Date.now();
+    for (const [id, tr] of trades) {
+      if (tr.expires < now) {
+        trades.delete(id);
+        notifyTrade(tr, { t: "trade_fail", id, reason: "expired" });
+      }
+    }
+  }
+
+  function notifyTrade(tr, msg) {
+    const text = JSON.stringify(msg);
+    players.get(tr.fromId)?.conn.send(text);
+    players.get(tr.toId)?.conn.send(text);
+  }
+
+  function sanitizeGoods(g) {
+    if (g === undefined || g === null) return {};
+    if (typeof g !== "object" || Array.isArray(g)) return null;
+    const keys = Object.keys(g);
+    if (keys.length > 20) return null;
+    const out = {};
+    for (const k of keys) {
+      if (k.length > 40) return null;
+      const q = Number(g[k]);
+      if (!Number.isInteger(q) || q <= 0 || q > 100000) return null;
+      out[k] = q;
+    }
+    return out;
+  }
+
+  function handleTradeOffer(player, msg) {
+    sweepTrades();
+    const id = String(msg.id || "");
+    if (id.length < 8 || id.length > 80 || trades.has(id)) return;
+    const target = players.get(String(msg.to || ""));
+    if (!target || target.id === player.id || target.dead) return;
+    const giveCredits = Math.round(Number(msg.giveCredits) || 0);
+    const wantCredits = Math.round(Number(msg.wantCredits) || 0);
+    if (giveCredits < 0 || giveCredits > 1e9 || wantCredits < 0 || wantCredits > 1e9) return;
+    const giveGoods = sanitizeGoods(msg.giveGoods);
+    const wantGoods = sanitizeGoods(msg.wantGoods);
+    if (!giveGoods || !wantGoods) return;
+    if (!giveCredits && !wantCredits && !Object.keys(giveGoods).length && !Object.keys(wantGoods).length) return;
+    // рядом и в одной системе
+    const a = player.state;
+    const b = target.state;
+    if (!a || !b) return;
+    if (a.sys && b.sys && a.sys !== b.sys) return;
+    const dx = a.x - b.x;
+    const dy = a.y - b.y;
+    if (dx * dx + dy * dy > TRADE_MAX_RANGE * TRADE_MAX_RANGE) return;
+    // лимит незавершённых офферов на игрока
+    let pending = 0;
+    for (const tr of trades.values()) if (tr.fromId === player.id || tr.toId === player.id) pending++;
+    if (pending >= TRADE_MAX_PENDING_PER_PLAYER) return;
+
+    const tr = {
+      id, fromId: player.id, toId: target.id,
+      giveCredits, wantCredits, giveGoods, wantGoods,
+      expires: Date.now() + TRADE_TTL_MS,
+    };
+    trades.set(id, tr);
+    target.conn.send(JSON.stringify({
+      t: "trade_offer", id, from: player.id, fromName: player.username,
+      giveCredits, wantCredits, giveGoods, wantGoods,
+    }));
+  }
+
+  async function handleTradeAccept(player, msg) {
+    sweepTrades();
+    const tr = trades.get(String(msg.id || ""));
+    if (!tr || tr.toId !== player.id) return;
+    trades.delete(tr.id);
+    const from = players.get(tr.fromId);
+    if (!from) return notifyTrade(tr, { t: "trade_fail", id: tr.id, reason: "offline" });
+    try {
+      // эскроу: встречные переводы атомарно; товары переходят на клиентах по trade_done
+      await ledger.executeTrade({
+        idA: `${tr.id}-a`, idB: `${tr.id}-b`,
+        fromA: `player:${from.username}`, toB: `player:${player.username}`,
+        amountA: tr.giveCredits, amountB: tr.wantCredits,
+        reason: `trade:${from.username}↔${player.username}`,
+      });
+      notifyTrade(tr, {
+        t: "trade_done", id: tr.id, from: tr.fromId, to: tr.toId,
+        giveCredits: tr.giveCredits, wantCredits: tr.wantCredits,
+        giveGoods: tr.giveGoods, wantGoods: tr.wantGoods,
+      });
+    } catch (e) {
+      notifyTrade(tr, { t: "trade_fail", id: tr.id, reason: e?.code || "error" });
+    }
+  }
+
+  function handleTradeDecline(player, msg) {
+    sweepTrades();
+    const tr = trades.get(String(msg.id || ""));
+    if (!tr || tr.toId !== player.id) return;
+    trades.delete(tr.id);
+    notifyTrade(tr, { t: "trade_declined", id: tr.id });
+  }
+
+  function handleTradeCancel(player, msg) {
+    sweepTrades();
+    const tr = trades.get(String(msg.id || ""));
+    if (!tr || tr.fromId !== player.id) return;
+    trades.delete(tr.id);
+    notifyTrade(tr, { t: "trade_cancelled", id: tr.id });
+  }
+
   function handleConnection(conn, username) {
     if (players.size >= MAX_PLAYERS) {
       conn.send(JSON.stringify({ t: "error", error: "shard_full" }));
@@ -194,6 +324,10 @@ export function createWorld(dataDir) {
         return;
       }
       if (msg?.t === "hit") return handleHit(player, msg);
+      if (msg?.t === "trade_offer") return void handleTradeOffer(player, msg);
+      if (msg?.t === "trade_accept") return void handleTradeAccept(player, msg);
+      if (msg?.t === "trade_decline") return void handleTradeDecline(player, msg);
+      if (msg?.t === "trade_cancel") return void handleTradeCancel(player, msg);
       if (msg?.t !== "state") return;
       const now = Date.now();
       if (now - player.lastRelay < STATE_MIN_INTERVAL_MS) return; // троттлинг 20 Гц
@@ -214,6 +348,13 @@ export function createWorld(dataDir) {
 
     conn.onClose = () => {
       if (!players.delete(conn.id)) return;
+      // незавершённые сделки с участником отменяются
+      for (const [id, tr] of trades) {
+        if (tr.fromId === conn.id || tr.toId === conn.id) {
+          trades.delete(id);
+          notifyTrade(tr, { t: "trade_fail", id, reason: "offline" });
+        }
+      }
       broadcast({ t: "leave", id: conn.id });
       broadcastWorld(); // online изменился
     };

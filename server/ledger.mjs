@@ -170,6 +170,42 @@ export function createLedger(dataDir) {
     });
   }
 
+  /**
+   * Эскроу-сделка игрок↔игрок (15c): две встречные транзакции АТОМАРНО —
+   * обе в одном блоке mutex, при недостатке средств у любой стороны ни одна
+   * не проводится. Согласие: инициатор выразил оффером, адресат — акцептом.
+   * amountA: fromA → toB, amountB: toB → fromA (0 = сторона без денег).
+   */
+  function executeTrade({ idA, idB, fromA, toB, amountA, amountB, reason }) {
+    const re = /^player:[\p{L}\p{N}_-]{3,24}$/u;
+    if (!re.test(fromA) || !re.test(toB) || fromA === toB) throw { code: "bad_accounts" };
+    for (const [id, amount] of [[idA, amountA], [idB, amountB]]) {
+      if (typeof id !== "string" || id.length < 8 || id.length > 80) throw { code: "bad_id" };
+      if (!Number.isInteger(amount) || amount < 0 || amount > MAX_AMOUNT) throw { code: "bad_amount" };
+    }
+    return mutex(async () => {
+      const dup = byId.get(idA) || byId.get(idB);
+      if (dup) return { dedup: true, entries: [byId.get(idA), byId.get(idB)].filter(Boolean) };
+      if (balanceOf(fromA) - amountA < 0 || balanceOf(toB) - amountB < 0) throw { code: "insufficient_funds" };
+      const entries = [];
+      const mk = (id, from, to, amount) => ({
+        id, seq: lastSeq + 1, t: Date.now(), kind: "trade", from, to, amount,
+        reason: typeof reason === "string" ? reason.slice(0, 140) : "",
+      });
+      if (amountA > 0) entries.push(mk(idA, fromA, toB, amountA));
+      if (amountB > 0) entries.push(mk(idB, toB, fromA, amountB));
+      for (const e of entries) {
+        apply(e);
+        byId.set(e.id, e);
+        await appendFile(journalFile, JSON.stringify(e) + "\n", "utf8");
+      }
+      const tmp = balancesFile + ".tmp";
+      await writeFile(tmp, JSON.stringify({ seq: lastSeq, accounts: Object.fromEntries(balances) }), "utf8");
+      await rename(tmp, balancesFile);
+      return { dedup: false, entries };
+    });
+  }
+
   function publicBalances(username) {
     const pools = {};
     for (const n of POOL_NAMES) pools[n] = balanceOf(`pool:${n}`);
@@ -184,5 +220,5 @@ export function createLedger(dataDir) {
       .slice(0, Math.min(limit, 200));
   }
 
-  return { load, transact, systemTopup, publicBalances, historyFor, balanceOf };
+  return { load, transact, systemTopup, executeTrade, publicBalances, historyFor, balanceOf };
 }

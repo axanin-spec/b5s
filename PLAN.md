@@ -769,6 +769,13 @@ world (x, y) → three (x, 0, −z) — совпадает с `__gameProbe {z: �
   убийства журналируются в world.json (kills, killsLog ≤50). Деньги бои НЕ
   двигают — только ledger. Клиент: `worldNet.sendHit`, `combatLog`, флаг
   `dead` (оверлей погибших не рисует). Автотест `server/test-pvp.mjs` — 9/9.
+  Ход 2026-11-21 (3): торговля игрок↔игрок — эскроу через ledger:
+  `trade_offer/accept/decline/cancel` по WS (TTL 60 с, дистанция ≤1500,
+  ≤10 висящих офферов), расчёт атомарен (`ledger.executeTrade` — встречные
+  переводы «всё или ничего», журнал kind:"trade"); товары переходят на
+  клиентах по `trade_done` (игровая интеграция — следующий шаг). Клиент:
+  `worldNet.sendTradeOffer/acceptTrade/...`, `tradeOffers`, `tradeEvents`.
+  Автотест `server/test-trade.mjs` — 8/8.
 
 ### Конвенция статусов задач (договорённость 2026-11-21)
 Работа ведётся вдвоём. Кто берёт задачу — ставит у пункта пометку

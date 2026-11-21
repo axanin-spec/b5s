@@ -38,6 +38,24 @@ export interface CombatEvent {
   hp?: number;
 }
 
+/** Входящее торговое предложение (15c). */
+export interface TradeOffer {
+  id: string;
+  from: string;
+  fromName: string;
+  giveCredits: number;
+  wantCredits: number;
+  giveGoods: Record<string, number>;
+  wantGoods: Record<string, number>;
+}
+
+/** Исход сделки (15c): done — расчёт прошёл (товары переходят на клиентах). */
+export interface TradeEvent {
+  t: "trade_done" | "trade_fail" | "trade_declined" | "trade_cancelled";
+  id: string;
+  reason?: string;
+}
+
 export interface WorldInfo {
   pools: { patrol: number; alliance: number; clan: number; stations: number };
   online: number;
@@ -56,6 +74,10 @@ class WorldNet {
   world: WorldInfo | null = null;
   /** Последние боевые события шарда (15c), новые в конце, ≤ 100. */
   combatLog: CombatEvent[] = [];
+  /** Входящие торговые офферы (15c), по id. */
+  tradeOffers = new Map<string, TradeOffer>();
+  /** Исходы сделок, новые в конце, ≤ 50. */
+  tradeEvents: TradeEvent[] = [];
 
   private ws: WebSocket | null = null;
   private token: string | null = null;
@@ -90,6 +112,8 @@ class WorldNet {
     this.ws = null;
     this.players.clear();
     this.combatLog = [];
+    this.tradeOffers.clear();
+    this.tradeEvents = [];
     this.selfId = null;
     this.status = "offline";
     this.emit();
@@ -104,6 +128,35 @@ class WorldNet {
   sendHit(targetId: string, dmg: number): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({ t: "hit", target: targetId, dmg }));
+    }
+  }
+
+  /** Торговля (15c): создать оффер игроку toId. id генерируется клиентом (идемпотентность). */
+  sendTradeOffer(toId: string, terms: { giveCredits?: number; wantCredits?: number; giveGoods?: Record<string, number>; wantGoods?: Record<string, number> }): string {
+    const id = crypto.randomUUID();
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ t: "trade_offer", id, to: toId, ...terms }));
+    }
+    return id;
+  }
+
+  acceptTrade(id: string): void {
+    this.#sendTradeVerb("trade_accept", id);
+  }
+
+  declineTrade(id: string): void {
+    this.tradeOffers.delete(id);
+    this.#sendTradeVerb("trade_decline", id);
+    this.emit();
+  }
+
+  cancelTrade(id: string): void {
+    this.#sendTradeVerb("trade_cancel", id);
+  }
+
+  #sendTradeVerb(verb: string, id: string): void {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ t: verb, id }));
     }
   }
 
@@ -217,6 +270,28 @@ class WorldNet {
         if (this.combatLog.length > 100) this.combatLog.shift();
         const p = this.players.get(ev.id);
         if (p) p.dead = false;
+        break;
+      }
+      case "trade_offer": {
+        const offer: TradeOffer = {
+          id: msg.id as string,
+          from: msg.from as string,
+          fromName: msg.fromName as string,
+          giveCredits: (msg.giveCredits as number) || 0,
+          wantCredits: (msg.wantCredits as number) || 0,
+          giveGoods: (msg.giveGoods as Record<string, number>) || {},
+          wantGoods: (msg.wantGoods as Record<string, number>) || {},
+        };
+        this.tradeOffers.set(offer.id, offer);
+        break;
+      }
+      case "trade_done":
+      case "trade_fail":
+      case "trade_declined":
+      case "trade_cancelled": {
+        this.tradeOffers.delete(msg.id as string);
+        this.tradeEvents.push({ t: msg.t, id: msg.id as string, reason: msg.reason as string | undefined });
+        if (this.tradeEvents.length > 50) this.tradeEvents.shift();
         break;
       }
       default:

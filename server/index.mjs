@@ -62,13 +62,13 @@ const USERS_FILE = path.join(DATA_DIR, "users.json");
 const TOKENS_FILE = path.join(DATA_DIR, "tokens.json");
 const saveFile = (username) => path.join(SAVES_DIR, encodeURIComponent(username) + ".json");
 
-// ---------- общий шард (Этап 15b); владеет world.json ----------
-
-const world = createWorld(DATA_DIR);
-
 // ---------- денежный авторитет (Этап 15c); journal.jsonl + balances.json ----------
 
 const ledger = createLedger(DATA_DIR);
+
+// ---------- общий шард (Этап 15b/15c); владеет world.json, торговля идёт через ledger ----------
+
+const world = createWorld(DATA_DIR, ledger);
 
 // ---------- auth ----------
 
