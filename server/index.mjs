@@ -9,6 +9,8 @@ import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { handleUpgrade } from "./ws.mjs";
+import { createWorld } from "./world.mjs";
 
 const PORT = Number(process.env.PORT) || 8787;
 const DATA_DIR = process.env.DATA_DIR || path.join(path.dirname(fileURLToPath(import.meta.url)), "data");
@@ -57,8 +59,11 @@ async function updateJson(file, fallback, mutator) {
 
 const USERS_FILE = path.join(DATA_DIR, "users.json");
 const TOKENS_FILE = path.join(DATA_DIR, "tokens.json");
-const WORLD_FILE = path.join(DATA_DIR, "world.json");
 const saveFile = (username) => path.join(SAVES_DIR, encodeURIComponent(username) + ".json");
+
+// ---------- общий шард (Этап 15b); владеет world.json ----------
+
+const world = createWorld(DATA_DIR);
 
 // ---------- auth ----------
 
@@ -169,8 +174,8 @@ async function route(req, res) {
     if (await usernameTaken(username)) return fail(res, 409, "username_taken");
     const { salt, hash } = hashPassword(password);
     await updateJson(USERS_FILE, {}, (users) => ({ ...users, [username]: { salt, hash, createdAt: Date.now() } }));
-    // Этап 15: каждая регистрация увеличивает счётчик — база для «+1 000 000 ₡ в пулы».
-    await updateJson(WORLD_FILE, { registered: 0 }, (w) => ({ ...w, registered: (w.registered || 0) + 1 }));
+    // Этап 15: регистрация подпитывает общие пулы (+1 000 000 ₡ пропорционально) — общий шард.
+    await world.onRegistration();
     return ok(res, { token: await issueToken(username), username });
   }
 
@@ -187,6 +192,10 @@ async function route(req, res) {
     const username = await authUser(req);
     if (!username) return fail(res, 401, "unauthorized");
     return ok(res, { username });
+  }
+
+  if (method === "GET" && url.pathname === "/api/world") {
+    return ok(res, { world: world.publicWorld() });
   }
 
   if (url.pathname === "/api/save") {
@@ -211,12 +220,34 @@ async function route(req, res) {
 // ---------- boot ----------
 
 await mkdir(SAVES_DIR, { recursive: true });
+await world.load();
 
 const server = createServer((req, res) => {
   route(req, res).catch((err) => {
     const code = err?.message === "body_too_large" ? 413 : err?.message === "bad_json" ? 400 : 500;
     fail(res, code, err?.message === "body_too_large" || err?.message === "bad_json" ? err.message : "internal_error");
   });
+});
+
+// WebSocket-вход в общий шард: GET /api/ws?token=<bearer> (Этап 15b)
+server.on("upgrade", (req, socket) => {
+  const url = new URL(req.url, "http://localhost");
+  if (url.pathname !== "/api/ws") {
+    socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
+    socket.destroy();
+    return;
+  }
+  handleUpgrade(
+    req,
+    socket,
+    async () => {
+      const token = url.searchParams.get("token") || "";
+      if (!token) return null;
+      const tokens = await readJson(TOKENS_FILE, {});
+      return tokens[token] || null; // username как контекст соединения
+    },
+    (conn, username) => world.handleConnection(conn, username),
+  );
 });
 
 server.listen(PORT, () => {

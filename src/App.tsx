@@ -4,6 +4,7 @@ import Home from './pages/Home'
 import { Login } from './pages/Login'
 import { getSession, wireRemoteSync, type Session } from './auth/client'
 import { flushRemote, preloadRemote } from './game/storage'
+import { worldNet } from './net/world'
 
 /**
  * Этап 15a: игра запускается только после входа. Порядок:
@@ -23,6 +24,7 @@ export default function App() {
     if (!session || SKIP_AUTH) return
     setReady(false)
     wireRemoteSync(session)
+    worldNet.connect(session.token) // общий шард (15b): транспорт, в игровой цикл не вмешивается
     let cancelled = false
     preloadRemote().finally(() => {
       if (!cancelled) setReady(true)
@@ -31,6 +33,7 @@ export default function App() {
     window.addEventListener('beforeunload', flush)
     return () => {
       cancelled = true
+      worldNet.disconnect()
       window.removeEventListener('beforeunload', flush)
     }
   }, [session])

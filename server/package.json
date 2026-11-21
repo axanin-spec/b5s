@@ -5,6 +5,7 @@
   "type": "module",
   "description": "MVP backend for Space Ranger multiplayer: accounts + cloud save (Stage 15a)",
   "scripts": {
-    "start": "node index.mjs"
+    "start": "node index.mjs",
+    "test": "node test-world.mjs"
   }
 }

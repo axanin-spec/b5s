@@ -54,12 +54,44 @@ data/
   users.json            { [username]: { salt, hash, createdAt } }
   tokens.json           { [token]: username }
   saves/<user>.json     { save, updatedAt }   (имя файла = encodeURIComponent(username))
-  world.json            { registered: number }
+  world.json            { registered, pools: { patrol, alliance, clan, stations }, updatedAt }
 ```
 
 Запись атомарна (tmp + rename), операции на файл сериализованы очередью.
 
-## Дальше (не входит в 15a)
+## Общий шард (Этап 15b)
 
-- 15b: world-state — общий шард, снапшот мира, присутствие игроков, +1M ₡ в пулы за регистрацию.
+### `GET /api/world`
+→ `{ ok: true, world: { pools, online, registered, updatedAt } }` — общие пулы и онлайн.
+Каждая регистрация добавляет в пулы +1 000 000 ₡ пропорционально
+(patrol 200k / alliance 260k / clan 140k / stations 400k).
+
+### WebSocket `GET /api/ws?token=<bearer>`
+Текстовые JSON-кадры. Невалидный токен — HTTP 401 до рукопожатия.
+Лимит: 200 игроков на шард (`{ t: "error", error: "shard_full" }`).
+
+Клиент → сервер:
+- `{ t: "state", x, y, a, sys?, hull? }` — позиция; x/y/a конечные числа
+  (округляются до 0.01), sys/hull строки ≤ 64. Троттлинг: не чаще 20 Гц,
+  избыточные кадры молча отбрасываются.
+
+Сервер → клиент:
+- `{ t: "welcome", id, players: [{ id, username, state }], world }` — свой id и ростер.
+- `{ t: "join", player: { id, username, state } }`
+- `{ t: "leave", id }`
+- `{ t: "state", id, x, y, a, sys?, hull? }` — ретрансляция чужих позиций.
+- `{ t: "world", world }` — при изменении пулов/онлайна.
+
+Heartbeat: сервер ping каждые 30 с, соединение без pong 60 с закрывается.
+Клиентский транспорт — `src/net/world.ts` (реконнект с backoff 1с→30с,
+отправка своего state таймером 10 Гц).
+
+Автотест: `node server/test-world.mjs` (10 проверок: пулы, welcome/join/state/
+leave, троттлинг, мусорные кадры, отказ по токену).
+
+## Дальше (не входит в 15a/15b)
+
+- Интеграция шарда в игровой цикл (рендер чужих кораблей, позывные, отправка
+  позиции из game.ts) — трек Б / следующий шаг.
+- 15c: авторитет сервера по деньгам и смертям, PvP-розыск, торговля игрок↔игрок.
 - Отзыв токенов, rate-limit, HTTPS-терминация — на стороне прокси при публикации.
