@@ -61,6 +61,14 @@ export interface Ship {
   escort: boolean;
   /** Индекс хозяина в пуле судов (для escort), -1 = не конвоир. */
   escortOf: number;
+  /** Гильдейская повинность (Этап 14b): кошелёк на выход из дока — сбор берётся с прибыли. */
+  voyStart: number;
+  /** Караван: секунды до следующего сигнала бедствия (TRADER_GUILD.CALL_CD). */
+  callCd: number;
+  /** Катер: секунды, оставшиеся от ответа на вызов каравана (CALL_TTL). */
+  callT: number;
+  /** Катер: индекс каравана, к которому спешит по вызову, -1 = вызова нет. */
+  callIdx: number;
   /** Convoy-raid event this ship belongs to (event id, -1 = none). */
   raidId: number;
   /** Member of the flagship's escort screen (Этап 11a) — its wreck drops real gear. */

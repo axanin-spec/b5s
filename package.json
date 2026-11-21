@@ -28,7 +28,9 @@
     "preskin": "npm run build:test",
     "skin": "node scripts/skin-test.mjs",
     "pretraders": "npm run build:test",
-    "traders": "node scripts/trader-test.mjs"
+    "traders": "node scripts/trader-test.mjs",
+    "prepatrol": "npm run build:test",
+    "patrol": "node scripts/patrol-test.mjs"
   },
   "dependencies": {
     "react": "^19.2.0",
