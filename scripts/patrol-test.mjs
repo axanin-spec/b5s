@@ -132,14 +132,22 @@ const hunt = await page.evaluate(() => {
   }
   if (!best || bestMin <= 3200) return { found: true, skip: "нет дальней точки", ok: false };
   window.__sim.tmove(t.i, best.cx, best.cy);
-  const pi = window.__sim.pirateSpawn(best.cx + 200, best.cy + 40);
+  // одинокий рейдер может не дожить до сводки: конвой 14a отстреливается.
+  // Подсаживаем новых на то же место, пока хоть один не доживёт до наводки катера.
+  let pi = window.__sim.pirateSpawn(best.cx + 200, best.cy + 40);
   let locked = false;
-  for (let k = 0; k < 40 && !locked; k++) {
+  for (let k = 0; k < 80 && !locked; k++) {
+    let pir = window.__sim.pinfo(pi);
+    if (!pir) {
+      pi = window.__sim.pirateSpawn(best.cx + 200, best.cy + 40);
+      pir = window.__sim.pinfo(pi);
+      if (!pir) break;
+    }
     window.__sim.step(15);
-    const pir = window.__sim.pinfo(pi);
-    if (!pir) break;
+    const cur = window.__sim.pinfo(pi);
+    if (!cur) continue;
     locked = window.__sim.patrols().some((p) => p.target === pi
-      && Math.hypot(p.x - pir.x, p.y - pir.y) > 3200);
+      && Math.hypot(p.x - cur.x, p.y - cur.y) > 3200);
   }
   return { found: true, locked, minDist: best.mind };
 });

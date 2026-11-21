@@ -6,7 +6,7 @@
  */
 
 import {
-  BOLT_CFG, BLACK_STREET, CLAN_ONLY_GOODS, CONTRACTS, CONVOY, ECONOMY, EMERGENCY_PULSE, EQUIP, EQUIP_LINES, EQUIP_SELL, FACTION_CFG, GATE_CFG, GOODS, HULLS, HULL_SELL, MODULE_LOOT, OCCUPATION, PATROL_ECON, PIRATE_BRANCH, PIRATE_ECON, PLAYER_CFG, POPULATION, QUALITY, RANKS, RAID,
+  BOLT_CFG, BLACK_STREET, CLAN_ONLY_GOODS, CONTRACTS, CONVOY, ECONOMY, EMERGENCY_PULSE, EQUIP, EQUIP_LINES, EQUIP_SELL, FACTION_CFG, GATE_CFG, GOODS, HULLS, HULL_SELL, MODULE_LOOT, OCCUPATION, PATROL_ECON, PICKUP, PIRATE_BRANCH, PIRATE_ECON, PLAYER_CFG, POPULATION, QUALITY, RANKS, RAID,
   MONEY_TOTAL, POOLS, REPAIR_COST_PER_HP, REP, SAVE_VERSION, AUTOSAVE_INTERVAL, SMUGGLER, STARTER_KIT, SYSTEMS, TRADER_AI, TRADER_GUILD, TRADER_TIERS, INSPECT, CONTRABAND_GOODS,
   VICTORY_SHARE, WORLD_CFG,
 } from "./config";
@@ -37,7 +37,8 @@ import { AiState } from "./types";
 
 const MAX_SHIPS = 40;
 const MAX_BOLTS = 200;
-const MAX_PICKUPS = 28;
+/** 14e: при TTL 600 с галактика копит ~180 живых поддонов (замер) — ёмкость с запасом ×1.4. */
+const MAX_PICKUPS = 256;
 
 /** Debug/test bridges on window (Этап 9b): dev server or the test build only, never prod. */
 const BRIDGES = import.meta.env.DEV || import.meta.env.VITE_BRIDGES === "1";
@@ -1341,18 +1342,27 @@ export class Game {
     return EQUIP[`${line.id}-${RANKS[rankIdx]}`] ?? null;
   }
 
-  private spawnPickup(kind: "credits" | "cargo" | "module", goodId: string, amount: number, x: number, y: number, src: PoolId = "clan"): void {
+  /**
+   * Выброс поддона (14e): единый TTL PICKUP.LIFE на все виды. Пул 28 слотов при
+   * десяти минутах жизни забивается в горячих боях — новому трофею уступаем место
+   * ИСПАРЕНИЕМ старейшего (кредиты при этом не пропадают: они всё ещё в пуле-доноре).
+   */
+  private spawnPickup(kind: "credits" | "cargo" | "module", goodId: string, amount: number, x: number, y: number, src: PoolId = "clan"): number {
+    let slot: Pickup | null = null; // свободный слот; если пул полон — старейший поддон
     for (let i = 0; i < MAX_PICKUPS; i++) {
       const p = this.pickups[i];
-      if (p.active) continue;
-      p.active = true;
-      p.kind = kind; p.goodId = goodId; p.amount = amount; p.src = src;
-      p.x = x; p.y = y;
-      const a = this.rnd() * Math.PI * 2;
-      p.vx = Math.cos(a) * 60; p.vy = Math.sin(a) * 60;
-      p.life = 30;
-      return;
+      if (!p.active) { slot = p; break; }
+      if (!slot || p.life < slot.life) slot = p;
     }
+    if (!slot) return -1;
+    const p = slot;
+    p.active = true;
+    p.kind = kind; p.goodId = goodId; p.amount = amount; p.src = src;
+    p.x = x; p.y = y;
+    const a = this.rnd() * Math.PI * 2;
+    p.vx = Math.cos(a) * 60; p.vy = Math.sin(a) * 60;
+    p.life = PICKUP.LIFE;
+    return this.pickups.indexOf(p);
   }
 
   /* ================================================================== */
@@ -3768,9 +3778,17 @@ export class Game {
         return this.player.credits;
       },
       stations: () => this.dockables.filter((d) => d.isStation).map((d) => ({ id: d.id, kind: d.kind, name: d.name })),
-      // трофейные поддоны (Этап 11a): живые пикапы в мире — вид, id, позиция
+      // трофейные поддоны (Этап 11a): живые пикапы в мире — вид, id, позиция, остаток TTL (14e)
       pickups: () => this.pickups.filter((pk) => pk.active)
-        .map((pk) => ({ kind: pk.kind, goodId: pk.goodId, amount: pk.amount, x: Math.round(pk.x), y: Math.round(pk.y) })),
+        .map((pk) => ({ kind: pk.kind, goodId: pk.goodId, amount: pk.amount, x: Math.round(pk.x), y: Math.round(pk.y), life: Math.round(pk.life) })),
+      // прямой выброс поддона для зонда 14e: возвращает индекс слота (или −1)
+      spawnpod: (kind: "credits" | "cargo" | "module", goodId: string, amount: number, x: number, y: number) =>
+        this.spawnPickup(kind, goodId, amount, x, y, "patrol"),
+      // состояние слота поддона по индексу (14e): живой ли, вид, остаток жизни
+      pstat: (i: number) => {
+        const pk = this.pickups[i];
+        return pk ? { kind: pk.kind, active: pk.active, life: Math.round(pk.life) } : null;
+      },
       // клановые бортники (Этап 8): маршрут/ИИ/кошелёк + не целится ли в них пират
       smugglers: () => this.ships
         .map((s, i) => ({ s, i }))

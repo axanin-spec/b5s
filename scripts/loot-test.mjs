@@ -116,19 +116,36 @@ const okBossDrop = bossRun.drops.length >= 1 && bossRun.grew >= 1;
 const okNoSSS = [...pirateRun.drops, ...bossRun.drops].every((id) => rankOf(id) !== "SSS");
 
 // ── 3. полный склад: конвертация в кредиты, склад не растёт, инвариант цел ──
+// 14e: модули живут 10 мин — чужие поддоны по карте висят вечно для теста,
+// поэтому лидим СВЕЖИЙ поддон у игрока: появился → магнит дотащил → исчез,
+// склад не вырос, кредиты толстеют. Глобальная «исчезли все модули» больше не верна.
 const fullRun = await page.evaluate(() => {
   for (let i = window.__sim.ship().stash.length; i < 64; i++) window.__sim.give("needle-C");
-  const out = { sawModulePod: false, converted: false, deltas: [] };
-  for (let wave = 0; wave < 6 && !out.converted; wave++) {
+  const out = { sawModulePod: false, converted: false, deltas: [], kills: 0, misses: 0 };
+  // радиус ЗАПОДЛИЦЫ магнита (320): всё, что сюда попало, — гарантированно будет собрано
+  const near = () => window.__sim.pickups().filter((p) => {
+    const [px, py] = window.__sim.probe().pos;
+    return p.kind === "module" && Math.hypot(p.x - px, p.y - py) < 300;
+  }).length;
+  for (let wave = 0; wave < 8 && !out.converted; wave++) {
     window.__perf.stress(8);
-    for (let k = 0; k < 8; k++) {
+    for (let k = 0; k < 8 && !out.converted; k++) {
+      // дожидаемся нуля как фона — чужие поддоны в заподлице обречены, ждём недолго
+      let b0 = 0;
+      for (let q = 0; q < 12; q++) { b0 = near(); if (!b0) break; window.__sim.step(60); }
+      const cr0 = window.__econAudit().player;
       if (!window.__sim.kill("pirate")) break;
-      const pods = window.__sim.pickups().filter((p) => p.kind === "module");
-      if (pods.length > 0) out.sawModulePod = true;
-      window.__sim.step(180);
-      const st = window.__sim.ship().stash;
+      out.kills++;
+      // игрок припаркован на обломках: дроп может быть подобран ДО первого шага — читаем сразу
+      let fresh = near() > b0;
+      for (let q = 0; q < 15 && !fresh; q++) { window.__sim.step(10); fresh = near() > b0; }
+      if (!fresh) { out.misses++; continue; }
+      out.sawModulePod = true;
+      let gone = false;
+      for (let q = 0; q < 120 && !gone; q++) { window.__sim.step(10); gone = near() === 0; }
       out.deltas.push(window.__econAudit().delta);
-      if (out.sawModulePod && st.length === 64 && window.__sim.pickups().every((p) => p.kind !== "module")) {
+      const st = window.__sim.ship().stash;
+      if (gone && st.length === 64 && window.__econAudit().player > cr0) {
         out.converted = true; // поддон исчез, склад не вырос — ушёл в кредиты
         break;
       }
@@ -147,6 +164,6 @@ await done({
 }, {
   pirates: { kills: pirateRun.kills, drops: pirateRun.drops },
   boss: bossRun,
-  full: { sawModulePod: fullRun.sawModulePod, converted: fullRun.converted },
+  full: { sawModulePod: fullRun.sawModulePod, converted: fullRun.converted, kills: fullRun.kills, misses: fullRun.misses },
   pageErrors: pageErrors.slice(0, 3),
 });

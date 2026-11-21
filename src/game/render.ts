@@ -10,7 +10,7 @@
  * 2D-режим рисует все проходы на одном канвасе в прежнем порядке.
  */
 
-import { GATE_CFG, INSPECT, QUALITY, RAID, WORLD_CFG } from "./config";
+import { GATE_CFG, INSPECT, PICKUP, QUALITY, RAID, WORLD_CFG } from "./config";
 import type { Bolt, Dockable, Pickup, Ship } from "./types";
 import type { ParallaxLayer } from "./game";
 import { perf } from "./perf";
@@ -324,6 +324,8 @@ export function drawEntities(c: RenderCtx, ctx: CanvasRenderingContext2D): void 
     const x = sx(c, pk.x), y = sy(c, pk.y) + Math.sin(t * 2 + pk.amount) * 6 * c.ppu;
     if (x < -40 || x > W + 40 || y < -40 || y > H + 40) continue;
     ctx.save();
+    // 14e: последние секунды жизни поддон мигает — скоро испарится
+    if (pk.life < PICKUP.BLINK) ctx.globalAlpha = 0.3 + 0.7 * Math.abs(Math.sin(t * 6));
     ctx.translate(x, y);
     ctx.rotate(Math.sin(t * 1.4 + pk.amount) * 0.3);
     ctx.drawImage(pk.kind === "credits" ? c.pickupTex.credits : c.pickupTex.cargo, -size / 2, -size / 2, size, size);

@@ -21,7 +21,7 @@
  * параллакса, что у 2D; туманности — большие additive/normal-плоскости в тех же слоях.
  */
 import * as THREE from "three";
-import { GATE_CFG, WORLD_CFG } from "./config";
+import { GATE_CFG, PICKUP, WORLD_CFG } from "./config";
 import { PALETTE_RGB, gatePulse, SHIP_SCALE, type RenderCtx } from "./render";
 import { makeGlowTexture, makePlanetAlbedo, makeShockTexture, makeStreakTexture } from "./textures";
 import { perf } from "./perf";
@@ -492,14 +492,15 @@ export class Renderer3D {
     // звезда — additive-билборд в центре (нижняя половина уходит за горизонт)
     this.put("star", 0, 0, 0, WORLD_CFG.STAR_RADIUS * 5.2 * c.ppu, this.tex(c.starTex), 0, 1, false);
 
-    // пикапы: покачивание — экранный сдвиг вниз → мировое −y
+    // пикапы: покачивание — экранный сдвиг вниз → мировое −y; мигание на исходе TTL (14e)
     const t = performance.now() * 0.001;
     let n = 0;
     for (const pk of c.pickups) {
       if (!pk.active) continue;
+      const blink = pk.life < PICKUP.BLINK ? 0.3 + 0.7 * Math.abs(Math.sin(t * 6)) : 1;
       this.put("pickup", n++, pk.x, pk.y - Math.sin(t * 2 + pk.amount) * 6, 46 * c.ppu,
         this.tex(pk.kind === "credits" ? c.pickupTex.credits : c.pickupTex.cargo),
-        -Math.sin(t * 1.4 + pk.amount) * 0.3, 1, false);
+        -Math.sin(t * 1.4 + pk.amount) * 0.3, blink, false);
     }
 
     // корабли: world angle θ на наклонном экране даёт ρ = atan2(sinθ·sinP, cosθ);

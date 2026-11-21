@@ -32,7 +32,9 @@
     "prepatrol": "npm run build:test",
     "patrol": "node scripts/patrol-test.mjs",
     "preinspect": "npm run build:test",
-    "inspect": "node scripts/inspect-test.mjs"
+    "inspect": "node scripts/inspect-test.mjs",
+    "prettl": "npm run build:test",
+    "ttl": "node scripts/ttl-test.mjs"
   },
   "dependencies": {
     "react": "^19.2.0",
