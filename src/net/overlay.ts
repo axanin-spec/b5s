@@ -55,6 +55,7 @@ export function startNetOverlay(root: HTMLElement): () => void {
     const ppu = ppuFor(w, h);
 
     for (const p of worldNet.players.values()) {
+      if (p.dead) continue; // 15c: погибших не рисуем до респауна
       const st = p.state;
       if (!st) continue;
       if (sys && st.sys && st.sys !== sys) continue;

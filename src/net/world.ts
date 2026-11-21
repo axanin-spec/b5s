@@ -25,6 +25,17 @@ export interface RemotePlayer {
   id: string;
   username: string;
   state: PlayerState | null;
+  dead?: boolean;
+}
+
+/** Боевое событие шарда (15c): hit — попадание по id, kill — смерть, respawn — возврат. */
+export interface CombatEvent {
+  t: "hit" | "kill" | "respawn";
+  id: string;
+  from?: string;
+  by?: string;
+  dmg?: number;
+  hp?: number;
 }
 
 export interface WorldInfo {
@@ -43,6 +54,8 @@ class WorldNet {
   selfId: string | null = null;
   players = new Map<string, RemotePlayer>();
   world: WorldInfo | null = null;
+  /** Последние боевые события шарда (15c), новые в конце, ≤ 100. */
+  combatLog: CombatEvent[] = [];
 
   private ws: WebSocket | null = null;
   private token: string | null = null;
@@ -76,6 +89,7 @@ class WorldNet {
     this.ws?.close();
     this.ws = null;
     this.players.clear();
+    this.combatLog = [];
     this.selfId = null;
     this.status = "offline";
     this.emit();
@@ -84,6 +98,13 @@ class WorldNet {
   /** Игра шлёт свою позицию; реальная отправка — таймером 10 Гц. */
   setState(s: PlayerState): void {
     this.pendingState = s;
+  }
+
+  /** PvP (15c): заявка о попадании по игроку. Сервер верифицирует и рассылает. */
+  sendHit(targetId: string, dmg: number): void {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ t: "hit", target: targetId, dmg }));
+    }
   }
 
   #wsUrl(): string {
@@ -174,6 +195,28 @@ class WorldNet {
       }
       case "world": {
         this.world = msg.world as WorldInfo;
+        break;
+      }
+      case "hit": {
+        const ev: CombatEvent = { t: "hit", id: msg.id as string, from: msg.from as string, dmg: msg.dmg as number, hp: msg.hp as number };
+        this.combatLog.push(ev);
+        if (this.combatLog.length > 100) this.combatLog.shift();
+        break;
+      }
+      case "kill": {
+        const ev: CombatEvent = { t: "kill", id: msg.id as string, by: msg.by as string };
+        this.combatLog.push(ev);
+        if (this.combatLog.length > 100) this.combatLog.shift();
+        const p = this.players.get(ev.id);
+        if (p) p.dead = true;
+        break;
+      }
+      case "respawn": {
+        const ev: CombatEvent = { t: "respawn", id: msg.id as string };
+        this.combatLog.push(ev);
+        if (this.combatLog.length > 100) this.combatLog.shift();
+        const p = this.players.get(ev.id);
+        if (p) p.dead = false;
         break;
       }
       default:
