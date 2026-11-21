@@ -3,7 +3,7 @@
  * Browser-local only: does not sync across devices; clearing browser data loses it.
  */
 
-import { EQUIP, GOODS, HULLS, MONEY_TOTAL, POOLS, SAVE_KEY, SAVE_VERSION } from "./config";
+import { EQUIP, GOODS, HULLS, MONEY_TOTAL, POOLS, SAVE_KEY, SAVE_VERSION, TRADER_TIERS } from "./config";
 import { storage } from "./storage";
 import type { EquipCat, SaveGame } from "./types";
 
@@ -100,6 +100,16 @@ export function validateSave(raw: unknown): SaveGame | null {
     }
   }
   if (!s.intel) s.intel = {};
+  // 14а: реестр караванов — опционален; сейвы до 14а входят с пустой книгой ниже
+  if (s.traders !== undefined && s.traders !== null) {
+    if (typeof s.traders !== "object") return null;
+    for (const k of Object.keys(s.traders)) {
+      const r = s.traders[k];
+      if (typeof r !== "object" || r === null || !isNum(r.trips) || r.trips < 0) return null;
+      if (!isNum(r.tier) || r.tier < 0 || r.tier >= TRADER_TIERS.TIERS.length) return null;
+    }
+  }
+  if (!s.traders) s.traders = {};
   // v6: closed money pools — sane finite numbers; the clan fund may run into debt
   // (Этап 5c hull write-offs) but never below -MONEY_TOTAL
   if (typeof s.pools !== "object" || s.pools === null) return null;

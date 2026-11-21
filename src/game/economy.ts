@@ -192,7 +192,8 @@ export function radioData(c: RadioCtx): RadioSnapshot | null {
       if (maxQty > 0) buys.push({ goodId: g.id, name: g.name, unit, maxQty });
     }
   }
-  return { shipIdx: i, name: s.name || "Караван", sells, buys, wallet: Math.round(s.wallet), holdFree: Math.max(0, room) };
+  // 14а: класс из реестра виден в шапке радио — ветеранов узнают по позывному и букве
+  return { shipIdx: i, name: s.name || "Караван", tier: s.tier, sells, buys, wallet: Math.round(s.wallet), holdFree: Math.max(0, room) };
 }
 
 /** Radio purchase: credits go straight into the caravan's pocket — pools untouched (5b). */

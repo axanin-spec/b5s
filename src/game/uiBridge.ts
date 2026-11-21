@@ -139,6 +139,8 @@ export interface RadioSnapshot {
   shipIdx: number;
   /** Trader callsign for the radio header. */
   name: string;
+  /** Класс каравана из реестра (Этап 14а): 0=C, 1=B, 2=A; у записей до 14а поля нет. */
+  tier?: number;
   /** What the caravan sells to us, priced at its home-market markup. */
   sells: { goodId: string; name: string; qty: number; unit: number }[];
   /** What the caravan would lift from us (limited by its wallet and hold). */

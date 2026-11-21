@@ -51,6 +51,16 @@ export interface Ship {
   cargo: Record<string, number>;
   /** Escort contract this ship is protecting (contract id, -1 = none). */
   escortId: number;
+  /** Боевой торговец (Этап 14а): индекс обидчика, которому караван отвечает, -1 = нет. */
+  angerIdx: number;
+  /** Секунды боевой тревоги (TRADER_TIERS.ANGER_T); по нулю angerIdx забывается. */
+  angerT: number;
+  /** Действующий класс из TRADER_TIERS.TIERS; реестр по позывному — в Game.traderTiers. */
+  tier: number;
+  /** Наёмный конвоир каравана (14а): патруль на жалованье у хозяина. */
+  escort: boolean;
+  /** Индекс хозяина в пуле судов (для escort), -1 = не конвоир. */
+  escortOf: number;
   /** Convoy-raid event this ship belongs to (event id, -1 = none). */
   raidId: number;
   /** Member of the flagship's escort screen (Этап 11a) — its wreck drops real gear. */
@@ -92,6 +102,8 @@ export interface Bolt {
   friendly: boolean;
   /** Faction of the shooter — drives hit resolution. */
   from: Faction;
+  /** Индекс стрелка в пуле судов (14а): караван по нему запоминает обидчика, -1 = нет. */
+  src: number;
   x: number; y: number;
   vx: number; vy: number;
   life: number;
@@ -315,6 +327,11 @@ export interface SaveGame {
    * посещённой станции, ключ — id дока. v8-сейвы поля не имеют: валидатор подставляет {}.
    */
   intel?: Record<string, MarketIntelEntry>;
+  /**
+   * v9 (Этап 14а, опционально): реестр караванов — класс и счёт удачных рейсов по позывному.
+   * Сейвы до 14а не имеют поля: все караваны начинают с чистого листа, валидатор подставляет {}.
+   */
+  traders?: Record<string, { tier: number; trips: number }>;
   stats: { kills: number; earned: number; traded: number; playTime: number };
   /** The dynamic pirate front — see OccupationState. */
   occupation: { systemId: string; held: boolean; t: number; flagshipBuilt: boolean };

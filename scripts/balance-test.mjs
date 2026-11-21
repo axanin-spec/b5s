@@ -185,5 +185,6 @@ await done({
   },
   deltas: { thinRun: [thin.before, thin.after], fatRun: [fat.before, fat.after], afterLoad: after.delta },
   saved: { audit: saved.a, save: saved.sv },
+  afterPools: { pools: after.pools, player: after.player, traderFloat: after.traderFloat },
   pageErrors: pageErrors.slice(0, 3),
 });

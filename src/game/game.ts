@@ -7,7 +7,7 @@
 
 import {
   BOLT_CFG, CONTRACTS, CONVOY, ECONOMY, EMERGENCY_PULSE, EQUIP, EQUIP_LINES, EQUIP_SELL, FACTION_CFG, GATE_CFG, GOODS, HULLS, HULL_SELL, MODULE_LOOT, OCCUPATION, PATROL_ECON, PIRATE_BRANCH, PIRATE_ECON, PLAYER_CFG, POPULATION, QUALITY, RANKS, RAID,
-  MONEY_TOTAL, POOLS, REPAIR_COST_PER_HP, REP, SAVE_VERSION, AUTOSAVE_INTERVAL, SMUGGLER, STARTER_KIT, SYSTEMS, TRADER_AI,
+  MONEY_TOTAL, POOLS, REPAIR_COST_PER_HP, REP, SAVE_VERSION, AUTOSAVE_INTERVAL, SMUGGLER, STARTER_KIT, SYSTEMS, TRADER_AI, TRADER_TIERS,
   VICTORY_SHARE, WORLD_CFG,
 } from "./config";
 import type { EquipCat, EquipItem, HullDef, HullId, YardTier } from "./config";
@@ -55,11 +55,14 @@ function blankShip(): Ship {
     ai: AiState.Wander, targetIdx: -1, tx: 0, ty: 0, wanderT: 0,
     routeFrom: 0, routeTo: 0, name: "", wallet: 0, smuggler: false, cargo: {},
     escortId: -1, raidId: -1, raidGuard: false, screen: false, cruiser: false, thinkT: 0, thinkDt: 0.42, trailT: 0, regroupT: 0, regroupUsed: false, sprite: null,
+    // 14а: боевой караван и наёмный конвой — нейтральные значения до первого приказа
+    angerIdx: -1, angerT: 0, tier: 0, escort: false, escortOf: -1,
   };
 }
 
 /**
- * Can a bolt fired by `from` damage `target`? Traders never shoot; player may hit anyone.
+ * Can a bolt fired by `from` damage `target`? Player may hit anyone; since 14а a caravan
+ * defends itself — but its guns only recognize raiders, never patrols or the player.
  * `outlaw` is the patrol-hostility flag: the player shot civilians or their patrol
  * standing dropped to vendetta (REP.HOSTILE_PATROL).
  * `piratePact` (5f): to a wanted captain the raiders are kin — a pirate bolt never
@@ -72,6 +75,8 @@ export function canHit(from: Faction, target: Faction, outlaw: boolean, piratePa
       return target === "patrol" || target === "trader" || (target === "player" && !piratePact);
     case "boss": return target === "player" || target === "patrol" || target === "trader";
     case "patrol": return target === "pirate" || target === "boss" || (target === "player" && outlaw);
+    // 14а: оборонительная плазма каравана — бьёт только по рейдерам, по своим и игроку мимо
+    case "trader": return target === "pirate" || target === "boss";
     default: return false;
   }
 }
@@ -222,6 +227,11 @@ export class Game {
    * ключ — id дока; перезаписывается при каждом доке. Кормит сводку «Рынки» на карте.
    */
   marketIntel: Record<string, MarketIntelEntry> = {};
+  /**
+   * Реестр караванов (Этап 14а): позывной → {класс, счёт удачных рейсов}. Живёт между
+   * жизнями кораблей: убийство списывает запись, новые караваны стартуют с «C».
+   */
+  traderTiers: Record<string, { tier: number; trips: number }> = {};
 
   private static freshPlayerState(): PlayerState {
     return {
@@ -269,7 +279,7 @@ export class Game {
 
     for (let i = 0; i < MAX_SHIPS; i++) this.ships.push(blankShip());
     for (let i = 0; i < MAX_BOLTS; i++) {
-      this.bolts.push({ active: false, friendly: true, from: "player", x: 0, y: 0, vx: 0, vy: 0, life: 0, dmg: 0 });
+      this.bolts.push({ active: false, friendly: true, from: "player", src: -1, x: 0, y: 0, vx: 0, vy: 0, life: 0, dmg: 0 });
     }
     for (let i = 0; i < MAX_PICKUPS; i++) {
       this.pickups.push({ active: false, kind: "credits", src: "clan", goodId: "food", amount: 0, x: 0, y: 0, vx: 0, vy: 0, life: 0 });
@@ -510,7 +520,8 @@ export class Game {
   /* Spawning                                                            */
   /* ================================================================== */
 
-  spawnShip(faction: Faction, x: number, y: number): number {
+  /** armedTrader=false — клановый бортник (spawnSmuggler): без реестра, класса и пушек до 14с. */
+  spawnShip(faction: Faction, x: number, y: number, armedTrader = true): number {
     for (let i = 1; i < MAX_SHIPS; i++) {
       const s = this.ships[i];
       if (s.active) continue;
@@ -530,9 +541,19 @@ export class Game {
       s.tx = x; s.ty = y;
       if (faction === "trader") {
         // working capital is Alliance money until spent (5b): a poor Alliance sends poor ships
-        s.name = CONTRACTS.CALLSIGNS[Math.floor(this.rnd() * CONTRACTS.CALLSIGNS.length)];
+        // 14а: реестр караванов ведётся по позывному — постараемся выдать незанятый
+        let nm = CONTRACTS.CALLSIGNS[Math.floor(this.rnd() * CONTRACTS.CALLSIGNS.length)];
+        if (armedTrader) {
+          for (let t = 0; t < 5; t++) {
+            const c = CONTRACTS.CALLSIGNS[Math.floor(this.rnd() * CONTRACTS.CALLSIGNS.length)];
+            if (!this.ships.some((o, j) => j !== i && j > 0 && o.active && o.faction === "trader" && !o.smuggler && o.name === c)) { nm = c; break; }
+          }
+        }
+        s.name = nm;
+        const tierIdx = armedTrader ? (this.traderTiers[s.name]?.tier ?? 0) : 0;
+        const tt = TRADER_TIERS.TIERS[tierIdx];
         s.wallet = Math.min(
-          Math.round(TRADER_AI.CASH[0] + this.rnd() * (TRADER_AI.CASH[1] - TRADER_AI.CASH[0])),
+          Math.round((TRADER_AI.CASH[0] + this.rnd() * (TRADER_AI.CASH[1] - TRADER_AI.CASH[0])) * tt.walletMult),
           Math.max(0, Math.round(this.pools.alliance)),
         );
         this.pools.alliance -= s.wallet;
@@ -543,7 +564,15 @@ export class Game {
           const g = legal[Math.floor(this.rnd() * legal.length)];
           s.cargo[g.id] = (s.cargo[g.id] ?? 0) + 3 + Math.floor(this.rnd() * 4);
         }
-        this.pickTraderRoute(i);
+        // 14а: класс из реестра — корпус, броня и оборонительная плазма по книге
+        // (конвой наёмный нанимается в pickTraderRoute, куда уходим ниже)
+        s.tier = tierIdx;
+        if (armedTrader) {
+          s.maxHp = tt.hp; s.hp = tt.hp;
+          s.maxShield = tt.shield; s.shield = tt.shield;
+          s.dmg = tt.dmg; s.fireRate = tt.fireRate;
+        }
+        this.pickTraderRoute(i, false); // спавн/загрузка: без найма — до первой ходки
       }
       return i;
     }
@@ -561,6 +590,8 @@ export class Game {
     if (this.bossIdx === i) this.bossIdx = -1;
     // drop dangling target references
     for (const sh of this.ships) if (sh.active && sh.targetIdx === i) sh.targetIdx = -1;
+    // 14а: конвоир, оставшийся без хозяина, становится обычным патрулем (жалованье не возвращается)
+    for (const sh of this.ships) if (sh.active && sh.escort && sh.escortOf === i) { sh.escort = false; sh.escortOf = -1; sh.targetIdx = -1; }
   }
 
   /** Units of cargo in a trader hold. */
@@ -580,7 +611,9 @@ export class Game {
    * empty — the dock where the biggest buy→sell spread awaits. Small jitter keeps the
    * five caravans from all chasing the same trade.
    */
-  pickTraderRoute(idx: number): void {
+  /** hire=false — спавновый пересчёт (в т.ч. загрузка сейва): конвой нанимается на выходе
+   *  из дока, иначе continueGame повторно платил бы жалованье до сверки брутто-Альянса. */
+  pickTraderRoute(idx: number, hire = true): void {
     const s = this.ships[idx];
     const n = this.dockables.length;
     if (n === 0) return;
@@ -618,6 +651,19 @@ export class Game {
     s.routeTo = best < 0 ? (s.routeFrom + 1) % n : best;
     const d = this.dockables[s.routeTo];
     s.tx = d.x; s.ty = d.y;
+    // 14а: караван класса «A» нанимает конвой из фонда выхода — плата идёт в казну патруля
+    const t = TRADER_TIERS.TIERS[s.tier];
+    if (hire && t.escort && !s.smuggler && s.wallet >= t.escortCost
+      && !this.ships.some((o, j) => j > 0 && o.active && o.escort && o.escortOf === idx)) {
+      const ei = this.spawnShip("patrol", s.x + 260, s.y + 140);
+      if (ei >= 0) {
+        s.wallet -= t.escortCost;
+        this.pools.patrol += t.escortCost;
+        this.ships[ei].escort = true;
+        this.ships[ei].escortOf = idx;
+        this.setNews(`${s.name} нанял конвой на переход — ${t.escortCost} ₡ в казну патруля`);
+      }
+    }
   }
 
   /**
@@ -682,7 +728,29 @@ export class Game {
       }
     }
     // a hauler's route is fixed (lair ⇄ occupied); thinkSmuggler sends it to the gate (Этап 8)
-    if (!s.smuggler) this.pickTraderRoute(idx);
+    if (!s.smuggler) {
+      // 14а: прибытие с расчётом — зачтённый рейс. Растёт книга, класс, конвой (в pickTraderRoute)
+      const rec = this.traderTiers[s.name] ?? (this.traderTiers[s.name] = { tier: 0, trips: 0 });
+      rec.trips++;
+      let tIdx = rec.tier;
+      while (tIdx + 1 < TRADER_TIERS.TIERS.length && rec.trips >= TRADER_TIERS.TIERS[tIdx + 1].need) tIdx++;
+      if (tIdx !== rec.tier) { rec.tier = tIdx; s.tier = tIdx; this.promoteTrader(idx, tIdx); }
+      this.pickTraderRoute(idx);
+    }
+  }
+
+  /** 14а: повышение класса — верфь догоняет корпус на ходу: броня/пушки растут, щиты дозаряжаются. */
+  private promoteTrader(idx: number, tIdx: number): void {
+    const s = this.ships[idx];
+    const t = TRADER_TIERS.TIERS[tIdx];
+    const dh = t.hp - s.maxHp, ds = t.shield - s.maxShield;
+    s.maxHp = t.hp; s.hp = Math.min(t.hp, s.hp + Math.max(0, dh));
+    s.maxShield = t.shield; s.shield = Math.min(t.shield, s.shield + Math.max(0, ds));
+    s.dmg = t.dmg; s.fireRate = t.fireRate;
+    if (this.sm.state === "playing" && Math.hypot(s.x - this.ships[0].x, s.y - this.ships[0].y) < 2600) {
+      this.setNews(`${s.name} заработал класс ${["C", "B", "A"][tIdx]}: верфь обновила корпус и пушки`);
+      this.audio.sfx("pickup");
+    }
   }
 
   /** Closest caravan on the radio band, -1 = none in range (Этап 5b). */
@@ -742,7 +810,7 @@ export class Game {
     const r = HALF * (0.75 + this.rnd() * 0.35);
     const x = Math.cos(a) * r, y = Math.sin(a) * r;
     if (Math.hypot(x - p.x, y - p.y) <= 3800) return; // don't surface a hauler on the player's nose
-    const idx = this.spawnShip("trader", x, y);
+    const idx = this.spawnShip("trader", x, y, false); // 14а: бортник без реестра и пушек
     if (idx < 0) return;
     const s = this.ships[idx];
     this.pools.alliance += s.wallet;
@@ -827,6 +895,7 @@ export class Game {
       b.active = true;
       b.friendly = s.faction === "player";
       b.from = s.faction;
+      b.src = fromIdx; // 14а: караван по индексу стрелка запоминает обидчика
       b.x = s.x + Math.cos(angle) * (s.radius + 16);
       b.y = s.y + Math.sin(angle) * (s.radius + 16);
       b.vx = Math.cos(angle) * speed + s.vx * 0.35;
@@ -861,11 +930,20 @@ export class Game {
     this.audio.sfx("laser");
   }
 
-  private damageShip(idx: number, dmg: number, byPlayer: boolean): void {
+  private damageShip(idx: number, dmg: number, byPlayer: boolean, byIdx = -1): void {
     const s = this.ships[idx];
     if (!s.active) return;
     if (idx === 0 && this.jumpGrace > 0) return; // post-jump invulnerability
     s.sinceHit = 0;
+    // 14а: гражданский караван помнит обидчика — только рейдеров (пират/флагман),
+    // оборонительный огонь по ним; игрок и патруль под его плазмой не значатся
+    if (s.faction === "trader" && !s.smuggler && byIdx >= 0 && byIdx !== idx && this.sm.state === "playing") {
+      const a = this.ships[byIdx];
+      if (a && a.active && (a.faction === "pirate" || a.faction === "boss")) {
+        s.angerIdx = byIdx;
+        s.angerT = TRADER_TIERS.ANGER_T;
+      }
+    }
     if (s.shield > 0) {
       const absorbed = Math.min(s.shield, dmg);
       s.shield -= absorbed;
@@ -938,6 +1016,8 @@ export class Game {
       s.cargo = {};
       // the spilled stake pays out of the fund that bankrolled it (clan for haulers, Этап 8)
       if (s.wallet > 0) this.spawnPickup("credits", "", Math.round(s.wallet), s.x, s.y, s.smuggler ? "clan" : "alliance");
+      // 14а: потопленный караван списывает книгу — судно замены строится заново с «C»
+      if (!s.smuggler) delete this.traderTiers[s.name];
     } else if (s.faction === "pirate" && this.rnd() < 0.4) {
       this.spawnPickup("cargo", GOODS[Math.floor(this.rnd() * GOODS.length)].id,
         2 + Math.floor(this.rnd() * 6), s.x + (this.rnd() - 0.5) * 160, s.y + (this.rnd() - 0.5) * 160);
@@ -1230,7 +1310,7 @@ export class Game {
       const idx = this.spawnShip("trader", d.x + (this.rnd() - 0.5) * 900, d.y + (this.rnd() - 0.5) * 900);
       if (idx >= 0) {
         this.ships[idx].routeFrom = di;
-        this.pickTraderRoute(idx);
+        this.pickTraderRoute(idx, false); // 14а: на загрузке конвой не нанимаем — сейв сверяется брутто
       }
     }
     // the patrol response to the player's raid re-forms on every arrival in the target (5d)
@@ -1244,6 +1324,7 @@ export class Game {
     this.occ = { systemId: OCCUPATION.START_SYSTEM, held: true, t: OCCUPATION.FLAGSHIP_BUILD, flagshipBuilt: false };
     this.pools = { ...POOLS };
     this.marketIntel = {}; // 10a: a fresh captain has no market history
+    this.traderTiers = {}; // 14а: a fresh campaign has no veteran caravans yet
     this.waypoint = null;
     this.raid = null;
     this.grabTarget = null; this.grabT = 0;
@@ -1294,6 +1375,8 @@ export class Game {
     this.pools = save.pools ? { ...save.pools } : { ...POOLS };
     // 10a: the intel log survives the reload; validateSave already backfilled a v8 save with {}
     this.marketIntel = save.intel ? { ...save.intel } : {};
+    // 14а: caravan ledgers survive too — pre-14а saves start every callsign at C
+    this.traderTiers = save.traders ? { ...save.traders } : {};
     this.waypoint = null;
     // the ops desk keeps the raid across a reload (guards re-form on arrival, see spawnInitialPopulation)
     this.raid = save.raid
@@ -1363,6 +1446,8 @@ export class Game {
       fluct,
       // 10a: market intel goes with the save — serialized as-is, entries are replaced whole
       intel: this.marketIntel,
+      // 14а: реестр караванов — сериализуется как есть, записи подменяются целиком
+      traders: this.traderTiers,
       stats: {
         kills: this.player.kills, earned: Math.round(this.player.earned),
         traded: Math.round(this.player.traded), playTime: Math.round(this.player.playTime),
@@ -2307,7 +2392,7 @@ export class Game {
       const s = this.ships[i];
       if (!s.active) continue;
       if (s.faction === "pirate") pirates++;
-      else if (s.faction === "patrol") patrols++;
+      else if (s.faction === "patrol") { if (!s.escort) patrols++; } // 14а: наёмный конвой — не казённый патруль
       else if (s.faction === "trader") traders++;
     }
     const pirateCap = this.pirateStrength();
@@ -2460,6 +2545,20 @@ export class Game {
     const HALF = WORLD_CFG.HALF;
 
     if (s.faction === "trader") {
+      // 14а: оборонительный огонь — караван помнит обидчика ANGER_T секунд и отвечает по нему,
+      // не сворачивая с маршрута: выстрел берёт общий блок NPC-огня по targetIdx.
+      if (!s.smuggler) {
+        if (s.angerT > 0) {
+          s.angerT -= dt;
+          const a = s.angerIdx >= 0 ? this.ships[s.angerIdx] : null;
+          if (s.angerT <= 0 || !a || !a.active) { s.angerIdx = -1; s.angerT = 0; s.targetIdx = -1; }
+          else if (Math.hypot(a.x - s.x, a.y - s.y) <= TRADER_TIERS.RANGE) s.targetIdx = s.angerIdx;
+          else s.targetIdx = -1; // выпустил из прицела — ждём, пока вернётся в радиус памяти
+        } else {
+          s.angerIdx = -1;
+          s.targetIdx = -1;
+        }
+      }
       // clan hauler (Этап 8): one endpoint, one trade, then run for the gate.
       // Flee doubles as "leaving the system" — the edge check in updateAi despawns it.
       if (s.smuggler) {
@@ -2512,6 +2611,32 @@ export class Game {
     }
 
     if (s.faction === "patrol") {
+      // 14а: наёмный конвой каравана — служит хозяину: бьёт угрозу у него, иначе держит крыло.
+      // В общий патрульный поиск не уходит: жалованье платит караван, а не казна.
+      if (s.escort) {
+        const boss = this.ships[s.escortOf];
+        if (!boss || !boss.active) {
+          s.escort = false; s.escortOf = -1; // страховка: cascade обычно чинит это в freeShip
+        } else {
+          let best = -1, bestD: number = TRADER_TIERS.ESCORT_ENGAGE;
+          for (let j = 1; j < MAX_SHIPS; j++) {
+            const o = this.ships[j];
+            if (!o.active || (o.faction !== "pirate" && o.faction !== "boss")) continue;
+            const d = Math.hypot(o.x - boss.x, o.y - boss.y); // ищем угрозу вокруг хозяина
+            if (d < bestD) { bestD = d; best = j; }
+          }
+          if (best >= 0) {
+            s.targetIdx = best;
+            s.ai = AiState.Chase;
+            s.tx = this.ships[best].x; s.ty = this.ships[best].y;
+          } else {
+            s.targetIdx = -1;
+            s.ai = AiState.Wander;
+            s.tx = boss.x - 180; s.ty = boss.y + 120; // крыло рядом с хозяином
+          }
+          return;
+        }
+      }
       // hunt pirates; hunt the player if outlaw or at vendetta with the patrol
       let best = -1, bestD: number = FACTION_CFG.patrol.aggro;
       if (this.patrolHostile() && p.active) {
@@ -2653,7 +2778,7 @@ export class Game {
         if (Math.hypot(s.x - b.x, s.y - b.y) > rr) continue;
         b.active = false;
         this.emit(b.x, b.y, 0, 0, 0.25, 2, 7);
-        this.damageShip(i, b.dmg, b.friendly);
+        this.damageShip(i, b.dmg, b.friendly, b.src);
         break;
       }
     }
@@ -3352,10 +3477,49 @@ export class Game {
           i, ai: s.ai, name: s.name,
           routeId: this.dockables[s.routeTo]?.id ?? null,
           wallet: Math.round(s.wallet), hp: s.hp, maxHp: s.maxHp,
+          dmg: s.dmg, fireRate: s.fireRate, // 14а: бортник безоружен до 14с — проверяет trader-test
           x: Math.round(s.x), y: Math.round(s.y),
           targetedByPirate: this.ships.some((o, j) => j > 0 && o.active
             && (o.faction === "pirate" || o.faction === "boss") && o.targetIdx === i),
         })),
+      // боевые торговцы (Этап 14а): живые караваны + реестр + шипы для probes
+      traders: () => this.ships
+        .map((s, i) => ({ s, i }))
+        .filter(({ s, i }) => i > 0 && s.active && s.faction === "trader" && !s.smuggler)
+        .map(({ s, i }) => ({
+          i, name: s.name, tier: s.tier, dmg: s.dmg, fireRate: s.fireRate,
+          hp: Math.round(s.hp), maxHp: s.maxHp, wallet: Math.round(s.wallet),
+          anger: s.angerT > 0 ? s.angerIdx : -1,
+          x: Math.round(s.x), y: Math.round(s.y),
+          trips: this.traderTiers[s.name]?.trips ?? 0,
+          escorts: this.ships.flatMap((o, j) => (j > 0 && o.active && o.escort && o.escortOf === i ? [j] : [])),
+        })),
+      // патентная книга караванов: позывной → {класс, рейсы}
+      reg: () => Object.fromEntries(Object.entries(this.traderTiers).map(([k, v]) => [k, { ...v }])),
+      // живые наёмные конвои: индекс, хозяин, текущая цель
+      tescorts: () => this.ships
+        .map((s, i) => ({ s, i }))
+        .filter(({ s, i }) => i > 0 && s.active && s.escort)
+        .map(({ s, i }) => ({ i, of: s.escortOf, target: s.targetIdx, x: Math.round(s.x), y: Math.round(s.y) })),
+      // тычки зонда: уронить судно idx ударом от by, проставить каравану счётчик рейсов, свести караван
+      thit: (i: number, dmg: number, by: number) => { this.damageShip(i, dmg, false, by); return this.ships[i].hp; },
+      setTrips: (name: string, n: number) => { const r = this.traderTiers[name]; if (!r) return false; r.trips = n; return true; },
+      tspawn: () => { this.spawnAtEdge("trader"); return true; },
+      // точный спавн пирата (гнев/огонь), счёт болтов каравана, принудительная сделка/пересчёт
+      // маршрута, кошелёк — переводом из казны Альянса, чтобы аудит денег не покосился
+      pirateSpawn: (x: number, y: number) => this.spawnShip("pirate", x, y),
+      tbolts: () => this.bolts.filter((b) => b.active && b.from === "trader").length,
+      thp: (i: number) => (this.ships[i] && this.ships[i].active ? Math.round(this.ships[i].hp) : -1),
+      tdock: (i: number) => { this.traderTrade(i); return true; },
+      tfree: (i: number) => { this.freeShip(i); return true; }, // распустить корабль (зонд конвоя)
+      trecalc: (i: number) => { this.pickTraderRoute(i); return true; },
+      twallet: (i: number, v: number) => {
+        const s = this.ships[i];
+        if (!s || !s.active || s.faction !== "trader") return -1;
+        const d = Math.min(v - s.wallet, this.pools.alliance);
+        s.wallet += d; this.pools.alliance -= d;
+        return Math.round(s.wallet);
+      },
       // телепорт игрока для probe-тестов кадров (12b: съёмка тела крупным планом)
       tp: (x: number, y: number) => {
         const p = this.ships[0];

@@ -78,7 +78,8 @@ function RadioPanel({ radio }: { radio: NonNullable<Snapshot['radio']> }) {
   const api = () => gameApi.current
   return (
     <div className="radio-panel hud-panel">
-      <div className="radio-head">📡 РАДИО · {radio.name}</div>
+      {/* 14а: буква класса из реестра караванов — ветеран виден с первого вызова */}
+      <div className="radio-head">📡 РАДИО · {radio.name}{radio.tier ? ` [${["C", "B", "A"][radio.tier]}]` : ""}</div>
       {radio.sells.length > 0 && (
         <div className="radio-sec">
           <div className="radio-sec-title">ПРОДАЁТ</div>
