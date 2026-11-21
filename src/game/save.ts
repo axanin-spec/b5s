@@ -91,6 +91,7 @@ export function validateSave(raw: unknown): SaveGame | null {
       const e = s.intel[k];
       if (typeof e !== "object" || e === null) return null;
       if (typeof e.systemId !== "string" || typeof e.name !== "string" || !isNum(e.t) || e.t < 0) return null;
+      if (e.clan !== undefined && !isBool(e.clan)) return null; // 14g: optional флаг кланового прилавка
       if (typeof e.prices !== "object" || e.prices === null) return null;
       for (const g of Object.keys(e.prices)) {
         const q = e.prices[g];

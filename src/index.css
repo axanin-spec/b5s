@@ -568,6 +568,20 @@ kbd {
 }
 .trade-price b { color: var(--accent); font-weight: 600; }
 .trade-price i { color: var(--text-dim); font-style: normal; }
+/* 14g: контрабанда в союзном доку — строка приглушена, кнопка не активна */
+.trade-row.banned { opacity: 0.6; }
+.ban-badge {
+  font-style: normal;
+  font-size: 9px;
+  color: var(--danger);
+  border: 1px solid rgba(255, 90, 74, 0.45);
+  border-radius: 4px;
+  padding: 1px 5px;
+  margin-left: 6px;
+  white-space: nowrap;
+  letter-spacing: 0.08em;
+}
+.banned-mark { color: var(--danger); font-style: normal; font-size: 11px; }
 .trade-have { color: var(--gold); text-align: center; }
 .trade-actions { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
 /* «продать весь трюм» (10d) — строка под таблицей товаров */
@@ -1126,6 +1140,8 @@ kbd {
 .sm-mk-table tr.sm-mk-none td:last-child { color: var(--text-dim); font-style: italic; text-align: left; }
 .sm-mk-cell .b { display: block; color: var(--accent); }
 .sm-mk-cell .s { display: block; color: #8fb4d8; }
+/* 14g: клановая тройка под запретом Альянса в союзных доках — на карте её не торгуют */
+.sm-mk-cell.mk-ban { color: var(--danger); opacity: 0.7; }
 
 .black-badge {
   font: 600 9px/1 ui-monospace, Consolas, monospace;
@@ -1243,4 +1259,74 @@ kbd {
   border-color: var(--accent);
   box-shadow: 0 0 10px rgba(84, 255, 210, 0.35);
   font-weight: 700;
+}
+
+/* ============================ login (Этап 15a) ============================ */
+
+.login-screen {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(ellipse at 50% 40%, rgba(10, 26, 44, 0.55), rgba(2, 6, 12, 0.95));
+}
+
+.login-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(360px, 90vw);
+  padding: 28px;
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  background: var(--panel);
+}
+
+.login-title {
+  margin: 0;
+  font-size: 22px;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+  text-align: center;
+}
+
+.login-sub {
+  margin: 0 0 6px;
+  font-size: 13px;
+  color: var(--text-dim);
+  text-align: center;
+}
+
+.login-input {
+  min-height: 44px;
+  padding: 10px 14px;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  background: rgba(10, 20, 32, 0.9);
+  color: var(--text);
+  font-size: 15px;
+  outline: none;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.login-input:focus { border-color: var(--accent); }
+
+.login-error {
+  margin: 0;
+  font-size: 13px;
+  color: var(--danger);
+  text-align: center;
+}
+
+.login-loading {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+  font-size: 15px;
+  letter-spacing: 0.06em;
+  background: #04060d;
 }

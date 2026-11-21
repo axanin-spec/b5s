@@ -537,8 +537,10 @@ export class Game {
         );
         this.pools.alliance -= s.wallet;
         // a starter hold so freshly launched ships have something to hawk
+        // (14g: зарегистрированный караван контрабандную тройку не возит)
+        const legal = GOODS.filter((g) => !econ.isClanOnlyGood(g.id));
         for (let k = 0; k < 2; k++) {
-          const g = GOODS[Math.floor(this.rnd() * GOODS.length)];
+          const g = legal[Math.floor(this.rnd() * legal.length)];
           s.cargo[g.id] = (s.cargo[g.id] ?? 0) + 3 + Math.floor(this.rnd() * 4);
         }
         this.pickTraderRoute(i);
@@ -593,11 +595,13 @@ export class Game {
       let v: number;
       if (loaded) {
         v = 0;
-        for (const g of GOODS) v += priceOf(d, g.id) * ECONOMY.SELL_FACTOR * Math.round(s.cargo[g.id] ?? 0);
+        // 14g: клановая тройка маршруту не аргумент — караван её не везёт
+        for (const g of GOODS) if (!econ.isClanOnlyGood(g.id)) v += priceOf(d, g.id) * ECONOMY.SELL_FACTOR * Math.round(s.cargo[g.id] ?? 0);
       } else {
         // best spread: buy cheap here, sell dear at the far side
         v = -Infinity;
         for (const g of GOODS) {
+          if (econ.isClanOnlyGood(g.id)) continue;
           let far = 0;
           for (let k = 0; k < n; k++) {
             if (k === j) continue;
@@ -632,6 +636,9 @@ export class Game {
     for (const g of GOODS) {
       const q = Math.round(s.cargo[g.id] ?? 0);
       if (q <= 0) continue;
+      // 14g: на союзной таможне «неучтёнка» не проходит — везём дальше (страховка
+      // от Legacy-груза: караваны контрабанду изначально не набирают)
+      if (pool === "stations" && econ.isClanOnlyGood(g.id)) continue;
       const unit = Math.max(1, Math.round(priceOf(here, g.id) * ECONOMY.SELL_FACTOR));
       const affordable = Math.floor(Math.max(0, Math.round(this.pools[pool])) / unit);
       const sold = Math.min(q, affordable);
@@ -651,6 +658,7 @@ export class Game {
     if (room > 0 && budget > 0) {
       let bestG: string | null = null, bestMargin = 8; // ₡8/unit before a caravan lifts anchor
       for (const g of GOODS) {
+        if (econ.isClanOnlyGood(g.id)) continue; // 14g: в гражданском манифесте её нет
         let far = 0;
         for (let k = 0; k < this.dockables.length; k++) {
           if (k === s.routeTo) continue;
@@ -1542,9 +1550,18 @@ export class Game {
     return econ.priceMods(this);
   }
 
+  /** 14g: союзный причал не торгует клановой тройкой — ни покупка, ни продажа. */
+  private banRefuse(d: Dockable, goodId: string): boolean {
+    if (!econ.clanOnlyBlocked(this, d, goodId)) return false;
+    this.audio.sfx("alarm");
+    this.setNews(`Таможня Альянса: «${goodName(goodId)}» в союзном доке под запретом — это товар чёрного рынка.`);
+    return true;
+  }
+
   buy(goodId: string, qty: number): void {
     const d = this.dockTarget;
     if (!d || this.sm.state !== "docked") return;
+    if (this.banRefuse(d, goodId)) return;
     const price = Math.max(1, Math.round(priceOf(d, goodId) * this.priceMods().buy));
     const space = this.cargoMax() - this.cargoUsed();
     const n = Math.min(qty, space, Math.floor(this.player.credits / price));
@@ -1564,6 +1581,7 @@ export class Game {
   sell(goodId: string, qty: number): void {
     const d = this.dockTarget;
     if (!d || this.sm.state !== "docked") return;
+    if (this.banRefuse(d, goodId)) return;
     const have = this.player.cargo[goodId] ?? 0;
     let n = Math.min(qty, have);
     if (n <= 0) return;
@@ -1595,8 +1613,17 @@ export class Game {
   sellAll(): void {
     const d = this.dockTarget;
     if (!d || this.sm.state !== "docked") return;
+    // 14g: контрабанда в союзном доке не продаётся — молча остаётся в трюме,
+    // одна сводная строка вместо трёх отказов
+    let banned = 0;
     for (const g of GOODS) {
-      if ((this.player.cargo[g.id] ?? 0) > 0) this.sell(g.id, 9999);
+      if ((this.player.cargo[g.id] ?? 0) <= 0) continue;
+      if (econ.clanOnlyBlocked(this, d, g.id)) { banned++; continue; }
+      this.sell(g.id, 9999);
+    }
+    if (banned > 0) {
+      this.audio.sfx("alarm");
+      this.setNews(`Таможня: ${banned === 1 ? "один запретный сорт" : `${banned} запретных сорта`} в трюме союзный док не берёт — держите для чёрного рынка.`);
     }
   }
 
@@ -2915,6 +2942,8 @@ export class Game {
       name: d.name,
       t: Math.round(this.player.playTime),
       prices: this.stationPrices(d),
+      // 14g: клановый прилавок — по нему карта помечает «запрет» на союзных строках
+      clan: econ.clanTurf(this, d),
     };
   }
 
@@ -2923,6 +2952,7 @@ export class Game {
     if (!d) return;
     const p = this.ships[0];
     const occupied = this.hereOccupied();
+    const clanMarket = econ.clanTurf(this, d); // 14g: чёрный прилавок — оккупация или Логово
     const mod = this.priceMods(); // priceNote below still reads the reputation bracket
     const prices = this.stationPrices(d);
     const station: StationSnapshot = {
@@ -2932,6 +2962,7 @@ export class Game {
         : (d.isStation ? "Орбитальная станция · " : "Планета · ") + kindName(d.kind),
       systemProfile: `Система ${this.systemDef.name} · ${this.systemDef.profileName}`,
       occupied,
+      clanMarket,
       eventGood: d.eventGood,
       prices,
       cargo: { ...this.player.cargo },
@@ -2945,7 +2976,7 @@ export class Game {
       wanted: this.patrolHostile(),
       outlaw: this.player.outlaw,
       pardons: this.player.pardons,
-      priceNote: (occupied || d.id === PIRATE_BRANCH.LAIR.id) ? (this.player.rep.clan >= REP.FRIENDLY
+      priceNote: clanMarket ? (this.player.rep.clan >= REP.FRIENDLY
         ? "Чёрный рынок: вы здесь «свой» — берут дешевле, платят жирнее"
         : this.player.rep.clan <= REP.UNFRIENDLY
           ? "Чёрный рынок: кланы вам не доверяют — цены впритык"
@@ -3031,7 +3062,7 @@ export class Game {
       },
       // 10a: visited stations only — the chart marks the rest «нет данных» itself
       intel: Object.entries(this.marketIntel).map(([dockableId, e]) => ({
-        dockableId, name: e.name, systemId: e.systemId, t: e.t, prices: e.prices,
+        dockableId, name: e.name, systemId: e.systemId, t: e.t, prices: e.prices, clan: e.clan,
       })),
       now: Math.round(this.player.playTime),
     };
@@ -3331,6 +3362,14 @@ export class Game {
         p.x = x; p.y = y; p.vx = 0; p.vy = 0;
         return true;
       },
+      // диагностика для зондов: состояние дока в текущий момент (14g)
+      probe: () => ({
+        state: this.sm.state,
+        target: this.dockTarget?.id ?? null,
+        gate: this.jumpGate?.to ?? null,
+        hot: this.raidHot(),
+        pos: [Math.round(this.ships[0].x), Math.round(this.ships[0].y)],
+      }),
       dockAt: (id: string) => {
         const d = this.dockables.find((x) => x.isStation && (x.id === id || x.kind === id));
         if (!d) return false;

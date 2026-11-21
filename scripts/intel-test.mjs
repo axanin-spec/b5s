@@ -5,7 +5,9 @@
  *  2. вторая станция добавляется в журнал, повторная стыковка обновляет время снимка;
  *  3. сейв v9 несёт разведку в localStorage (докинг автосохраняет);
  *  4. на карте вкладка «Система» → «Рынки»: посещённые со ценами, прочие «нет данных»;
- *  5. сейв v8 без intel загружается и даёт пустую разведку (обратная совместимость).
+ *  5. 14g: контрабанда (табак/специя/наркотики) — в союзном доку запрет (кнопки,
+ *     бейдж, buy молчит), в Логово покупается; сейв несёт clan-флаги снимков;
+ *  6. сейв v8 без intel загружается и даёт пустую разведку (обратная совместимость).
  *
  * Использование: npm run intel   (pre-хук сам соберёт build:test)
  */
@@ -22,7 +24,8 @@ if (!existsSync(join(DIST, "index.html"))) {
   console.error(`INTEL FAIL: no build output at ${DIST} — run \`npm run build:test\` first`);
   process.exit(1);
 }
-const GOOD_IDS = ["food", "ore", "meds", "tech", "lux", "arms"];
+// 14g: к шести гражданским добавились три клановых — снимаются все девять
+const GOOD_IDS = ["food", "ore", "meds", "tech", "lux", "arms", "tobacco", "spice", "drugs"];
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".json": "application/json", ".wasm": "application/wasm" };
 const server = createServer(async (req, res) => {
   try {
@@ -117,7 +120,52 @@ const okUi = collapsed
   && table.includes(names[0]) && table.includes("нет данных")
   && !table.includes("устарело"); // снимки свежие — глушения быть не должно
 
-// ── 5. сейв v8 без intel: грузится, разведка пуста ──
+// ── 5. 14g: контрабанда под запретом в союзном доке, свободна в Логово ──
+// Союзная станция (Эйдолон): buy специй/табака/наркотиков не проходит, в терминале бейдж.
+const allianceBan = await page.evaluate((id) => {
+  window.__gameApi.current.closeMap();
+  window.__sim.dockAt(id);
+  const s = window.__uiBridge.getSnapshot().station;
+  const before = { ...s.cargo };
+  // покупка на свои — контрабанда не проходит, провиант проходит
+  window.__gameApi.current.buy("spice", 10);
+  window.__gameApi.current.buy("food", 5);
+  const after = window.__uiBridge.getSnapshot().station.cargo;
+  return { clanMarket: s.clanMarket, spice: (after.spice ?? 0) - (before.spice ?? 0), food: (after.food ?? 0) - (before.food ?? 0) };
+}, st0);
+const banTable = await page.locator(".trade-table").innerText().catch(() => "");
+const okAllianceBan = allianceBan.clanMarket === false
+  && allianceBan.spice === 0 && allianceBan.food === 5
+  && banTable.includes("ЗАПРЕТ") && banTable.includes("не торгуется");
+await page.evaluate(() => window.__gameApi.current.undock());
+
+// Логово в Терминусе (клановый прилавок): контрабанда покупается свободно
+const lairTrade = await page.evaluate(() => {
+  window.__sim.jump("terminus");
+  // умеренная накачка: 10 млн ₡ пробивали VICTORY_SHARE и game переходила в "victory",
+  // из-за чего dock() выходил по state без вестей — 30 тыс. хватает на четыре ящика
+  window.__sim.cash(30000);
+  const rep = window.__sim.rep("clan", 40); // Логово не принимает чужих — делаем «своего» (6c)
+  const okDock = window.__sim.dockAt("lair");
+  const s = window.__uiBridge.getSnapshot().station;
+  if (!s) return { id: null, okDock, rep, diag: window.__sim.probe(), news: window.__uiBridge.getSnapshot().news };
+  const before2 = { ...s.cargo };
+  window.__gameApi.current.buy("drugs", 4);
+  window.__gameApi.current.buy("spice", 4);
+  const after = window.__uiBridge.getSnapshot().station.cargo;
+  return { id: s.id, okDock, rep, clanMarket: s.clanMarket, drugs: (after.drugs ?? 0) - (before2.drugs ?? 0), spice: (after.spice ?? 0) - (before2.spice ?? 0) };
+});
+await page.waitForTimeout(200);
+const lairFlags = await page.evaluate(() => {
+  const s = JSON.parse(localStorage.getItem("game.savegame"));
+  return { lair: s.intel?.lair?.clan, eidolon: s.intel?.[Object.keys(s.intel).find((k) => s.intel[k].systemId === "eidolon") ?? "" ]?.clan };
+});
+const okLairFree = lairTrade.id === "lair" && lairTrade.clanMarket === true
+  && lairTrade.drugs === 4 && lairTrade.spice === 4
+  && lairFlags.lair === true && lairFlags.eidolon === false;
+await page.evaluate(() => window.__gameApi.current.undock());
+
+// ── 6. сейв v8 без intel: грузится, разведка пуста ──
 const v8 = await page.evaluate(() => {
   window.__gameApi.current.closeMap();
   const s = JSON.parse(localStorage.getItem("game.savegame"));
@@ -130,8 +178,8 @@ const v8 = await page.evaluate(() => {
 });
 const okV8 = v8.playing === true && v8.intel === 0;
 
-const ok = { okRecord, okSecond, okRefresh, okSave, okUi, okV8, noPageErrors: pageErrors.length === 0 };
-console.log(JSON.stringify({ ok, seen: { st0, st1 }, snap: { count: snap0.count, t: e0?.t, now: snap0.now }, upd, v8, pageErrors: pageErrors.slice(0, 3) }, null, 1));
+const ok = { okRecord, okSecond, okRefresh, okSave, okUi, okAllianceBan, okLairFree, okV8, noPageErrors: pageErrors.length === 0 };
+console.log(JSON.stringify({ ok, seen: { st0, st1 }, snap: { count: snap0.count, t: e0?.t, now: snap0.now }, upd, allianceBan, lairTrade, lairFlags, v8, pageErrors: pageErrors.slice(0, 3) }, null, 1));
 await browser.close();
 server.close();
 process.exit(Object.values(ok).every(Boolean) ? 0 : 1);

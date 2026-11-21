@@ -5,7 +5,7 @@
  * через контекст, чтобы модуль оставался тестируемым без canvas.
  */
 
-import { ECONOMY, GOODS, MONEY_TOTAL, OCCUPATION, PIRATE_BRANCH, REP, TRADER_AI } from "./config";
+import { CLAN_ONLY_GOODS, ECONOMY, GOODS, MONEY_TOTAL, OCCUPATION, PIRATE_BRANCH, REP, TRADER_AI } from "./config";
 import type { Dockable, MoneyPools, PlayerState, PoolId, Ship } from "./types";
 import type { RadioSnapshot } from "./uiBridge";
 import { priceOf } from "./world";
@@ -44,9 +44,25 @@ export function pay(c: EconCtx, n: number, pool: PoolId): void {
   c.pools[pool] += spent;
 }
 
+/** Клановая земля: оккупированная система или Логово — один источник правды для
+ *  кассы, цен и контрабандного гейджа (14g). */
+export function clanTurf(c: EconCtx, d: Dockable | null): boolean {
+  return !!d && (c.hereOccupied() || d.id === PIRATE_BRANCH.LAIR.id);
+}
+
+/** Товар из клановой тройки (14g): в союзных доках не торгуется вообще. */
+export function isClanOnlyGood(goodId: string): boolean {
+  return CLAN_ONLY_GOODS.includes(goodId);
+}
+
+/** Гейдж 14g: контрабанда в союзном доку — сделку не проводить. */
+export function clanOnlyBlocked(c: EconCtx, d: Dockable | null, goodId: string): boolean {
+  return isClanOnlyGood(goodId) && !clanTurf(c, d);
+}
+
 /** Treasury a docked trade runs through: smuggler cash on clan turf, civilian capital elsewhere. */
 export function tradePool(c: EconCtx): PoolId {
-  return c.dockTarget && (c.hereOccupied() || c.dockTarget.id === PIRATE_BRANCH.LAIR.id) ? "clan" : "stations";
+  return clanTurf(c, c.dockTarget) ? "clan" : "stations";
 }
 
 /** Player's share of the galaxy's fixed credit mass (0..1) — the economic victory meter. */
@@ -117,7 +133,7 @@ export function tradeMod(c: EconCtx): { buy: number; sell: number } {
  */
 export function priceMods(c: EconCtx): { buy: number; sell: number } {
   const tm = tradeMod(c);
-  if (c.dockTarget && (c.hereOccupied() || c.dockTarget.id === PIRATE_BRANCH.LAIR.id)) {
+  if (clanTurf(c, c.dockTarget)) {
     const b = c.player.rep.clan >= REP.FRIENDLY ? PIRATE_BRANCH.BLACK_FRIEND
       : c.player.rep.clan <= REP.UNFRIENDLY ? PIRATE_BRANCH.BLACK_COLD
       : OCCUPATION.BLACK;
@@ -160,6 +176,9 @@ export function radioData(c: RadioCtx): RadioSnapshot | null {
   const buys: RadioSnapshot["buys"] = [];
   const room = TRADER_AI.HOLD - traderLoad(s);
   for (const g of GOODS) {
+    // 14g: зарегистрированный караван «неучтёнку» на борт не берёт —
+    // контрабанда ходит только через клановые причалы
+    if (isClanOnlyGood(g.id)) continue;
     const base = priceOf(home, g.id);
     const q = Math.round(s.cargo[g.id] ?? 0);
     if (q > 0) {
@@ -180,6 +199,7 @@ export function radioData(c: RadioCtx): RadioSnapshot | null {
 export function radioBuy(c: RadioCtx, shipIdx: number, goodId: string, qty: number): boolean {
   const s = c.ships[shipIdx];
   if (!s || !s.active || s.faction !== "trader") return false;
+  if (isClanOnlyGood(goodId)) return false; // 14g: борт каравана контрабанды не видит
   const home = c.dockables[Math.min(Math.max(s.routeFrom, 0), c.dockables.length - 1)];
   const unit = Math.max(1, Math.round(priceOf(home, goodId) * TRADER_AI.RADIO_SELL));
   const n = Math.max(0, Math.min(
@@ -205,6 +225,7 @@ export function radioBuy(c: RadioCtx, shipIdx: number, goodId: string, qty: numb
 export function radioSell(c: RadioCtx, shipIdx: number, goodId: string, qty: number): boolean {
   const s = c.ships[shipIdx];
   if (!s || !s.active || s.faction !== "trader") return false;
+  if (isClanOnlyGood(goodId)) return false; // 14g: борт каравана контрабанды не видит
   const home = c.dockables[Math.min(Math.max(s.routeFrom, 0), c.dockables.length - 1)];
   const unit = Math.max(1, Math.round(priceOf(home, goodId) * TRADER_AI.RADIO_BUY));
   const n = Math.max(0, Math.min(

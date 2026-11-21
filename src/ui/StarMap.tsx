@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { GOODS } from '@/game/config'
+import { CLAN_ONLY_GOODS, GOODS } from '@/game/config'
 import { gameApi, type MapSnapshot } from '@/game/uiBridge'
 
 /** Fixed galaxy positions for the six chart nodes (canvas fractions), hexagonal ring. */
@@ -325,9 +325,12 @@ export function StarMap({ map }: { map: MapSnapshot }) {
                         </td>
                         {GOODS.map((g) => {
                           const q = it.prices[g.id]
+                          // 14g: тройка в союзном доку не торгуется; старые снимки
+                          // (clan не записан) показываем как раньше — докинг обновит
+                          const ban = it.clan === false && CLAN_ONLY_GOODS.includes(g.id)
                           return (
-                            <td key={g.id} className="sm-mk-cell">
-                              {q ? <><span className="b">{q.buy}</span><span className="s">{q.sell}</span></> : '—'}
+                            <td key={g.id} className={`sm-mk-cell${ban ? ' mk-ban' : ''}`}>
+                              {ban ? <span title="запрещено Альянсом">⊘</span> : q ? <><span className="b">{q.buy}</span><span className="s">{q.sell}</span></> : '—'}
                             </td>
                           )
                         })}

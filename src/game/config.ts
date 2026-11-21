@@ -231,7 +231,24 @@ export const GOODS: readonly GoodDef[] = [
   { id: "tech", name: "Техника", base: 270 },
   { id: "lux", name: "Роскошь", base: 430 },
   { id: "arms", name: "Оружие", base: 620 },
+  // 14g: товарная тройка кланов — в GOODS на общих правах, но торгуется только
+  // на чёрном рынке (см. CLAN_ONLY_GOODS): наркотики печатают химзаводы и фарма,
+  // табак и специя — грядка агров и оранжереи научных колоний
+  { id: "tobacco", name: "Табак", base: 110 },
+  { id: "spice", name: "Специя", base: 170 },
+  { id: "drugs", name: "Наркотики", base: 240 },
 ] as const;
+
+/**
+ * 14g: контрабанда кланов — товар, которым союзные доки не торгуют вообще
+ * (ни покупают, ни продают): только чёрный рынок (оккупация и Логово).
+ * «Оружие» остаётся законным экспорт Альянса, но с 14d патрульный досмотр
+ * считает его уликой — поэтому CONTRABAND_GOODS шире, чем CLAN_ONLY_GOODS.
+ */
+export const CLAN_ONLY_GOODS: readonly string[] = ["tobacco", "spice", "drugs"];
+
+/** 14d: что ищет патрульный досмотр (оружие + наркотическая тройка). */
+export const CONTRABAND_GOODS: readonly string[] = ["arms", "tobacco", "spice", "drugs"];
 
 export type StationKind = "agri" | "mine" | "industry" | "science" | "hub";
 
@@ -245,11 +262,13 @@ export const STATION_KIND_NAMES: Record<StationKind, string> = {
 
 /** Price multiplier per good: <1 produces the good (cheap to buy), >1 consumes it (pays well). */
 export const KIND_MODS: Record<StationKind, Record<string, number>> = {
-  agri:     { food: 0.5, ore: 1.25, meds: 1.15, tech: 1.35, lux: 1.2, arms: 1.1 },
-  mine:     { food: 1.25, ore: 0.5, meds: 1.2, tech: 1.3, lux: 1.1, arms: 1.0 },
-  industry: { food: 1.15, ore: 1.35, meds: 1.0, tech: 0.6, lux: 1.1, arms: 0.8 },
-  science:  { food: 1.1, ore: 1.1, meds: 0.55, tech: 1.2, lux: 1.3, arms: 1.25 },
-  hub:      { food: 0.95, ore: 0.95, meds: 0.95, tech: 0.95, lux: 0.7, arms: 0.9 },
+  // 14g: tobacco/spice/drugs — профиль «где растёт и где потребляют»; торгуют ими
+  // только клановые причалы, но профиль нужен и для цен Логова/оккупации
+  agri:     { food: 0.5, ore: 1.25, meds: 1.15, tech: 1.35, lux: 1.2, arms: 1.1, tobacco: 0.55, spice: 1.1, drugs: 1.2 },
+  mine:     { food: 1.25, ore: 0.5, meds: 1.2, tech: 1.3, lux: 1.1, arms: 1.0, tobacco: 1.15, spice: 1.25, drugs: 1.3 },
+  industry: { food: 1.15, ore: 1.35, meds: 1.0, tech: 0.6, lux: 1.1, arms: 0.8, tobacco: 1.2, spice: 1.3, drugs: 0.7 },
+  science:  { food: 1.1, ore: 1.1, meds: 0.55, tech: 1.2, lux: 1.3, arms: 1.25, tobacco: 1.1, spice: 0.6, drugs: 0.75 },
+  hub:      { food: 0.95, ore: 0.95, meds: 0.95, tech: 0.95, lux: 0.7, arms: 0.9, tobacco: 0.9, spice: 0.9, drugs: 0.85 },
 };
 
 export const ECONOMY = {

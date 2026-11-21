@@ -274,6 +274,9 @@ export interface MarketIntelEntry {
   t: number;
   /** Terminal prices (buy/sell per good id) — same shape as StationSnapshot.prices. */
   prices: Record<string, { buy: number; sell: number }>;
+  /** 14g (v9, optional): снимок с кланового прилавка (оккупация/Логово). У старых
+   *  записей поля нет — карта тогда не рисует «запрет», докинг обновит запись. */
+  clan?: boolean;
 }
 
 export interface SaveGame {

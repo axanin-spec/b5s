@@ -74,6 +74,8 @@ export interface MapSnapshot {
   intel: {
     dockableId: string; name: string; systemId: string; t: number;
     prices: Record<string, { buy: number; sell: number }>;
+    /** 14g: снимок с кланового прилавка; undefined у записей, снятых до 14g. */
+    clan?: boolean;
   }[];
   /** Game time (playTime seconds) when this snapshot was built — reference for intel age. */
   now: number;
@@ -87,6 +89,8 @@ export interface StationSnapshot {
   systemProfile: string;
   /** true = black market terminal in an occupied system. */
   occupied: boolean;
+  /** 14g: клановый прилавок (оккупация или Логово) — здесь контрабанда торговая. */
+  clanMarket: boolean;
   eventGood: string | null;
   prices: Record<string, { buy: number; sell: number }>;
   cargo: Record<string, number>;
