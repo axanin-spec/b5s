@@ -1,0 +1,10 @@
+{
+  "name": "rangers-server",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "MVP backend for Space Ranger multiplayer: accounts + cloud save (Stage 15a)",
+  "scripts": {
+    "start": "node index.mjs"
+  }
+}

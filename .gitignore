@@ -4,3 +4,7 @@ dist-ssr/
 *.log
 .vite/
 .DS_Store
+
+# server data (Этап 15a)
+server/data/
+.env
