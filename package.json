@@ -38,7 +38,9 @@
     "prenet": "npm run build:test",
     "net": "node scripts/net-test.mjs",
     "preboss": "npm run build:test",
-    "boss": "node scripts/boss-test.mjs"
+    "boss": "node scripts/boss-test.mjs",
+    "prepvp": "npm run build:test",
+    "pvp": "node scripts/pvp-test.mjs"
   },
   "dependencies": {
     "react": "^19.2.0",

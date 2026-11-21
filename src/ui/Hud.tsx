@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { GOODS, INSPECT, REP, VICTORY_SHARE } from '@/game/config'
 import { gameApi, type Snapshot } from '@/game/uiBridge'
 import { GoodIcon } from './GoodIcon'
+import { NetTradeDock } from './TradeWindow'
 
 function fmt(n: number): string {
   return n.toLocaleString('ru-RU')
@@ -193,6 +194,8 @@ export function Hud({ snap, isTouch }: { snap: Snapshot; isTouch: boolean }) {
       <div className="hud-topright">
         <Minimap />
         <div className="hud-buttons">
+          {/* бортовой рынок игроков (15c): появляется только когда шард онлайн */}
+          <NetTradeDock cargo={hud.cargo} systemName={hud.systemName} />
           <button className="icon-btn" aria-label="Звёздная карта" onClick={() => api()?.toggleMap()}>🗺</button>
           <button className="icon-btn" aria-label="Пауза" onClick={() => api()?.pause()}>⏸</button>
           <button className="icon-btn" aria-label="Звук" onClick={() => api()?.toggleMute()}>

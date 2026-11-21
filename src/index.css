@@ -1277,6 +1277,65 @@ kbd {
   background: var(--panel);
 }
 
+/* бортовой рынок игроков (Этап 15c, трек Б): окно сделок в том же скине, что радио */
+.trade-win {
+  position: fixed; right: 14px; bottom: 110px; z-index: 31;
+  width: 300px; max-height: 62vh; overflow-y: auto;
+  padding: 8px 10px 10px;
+  font: 11px/1.45 ui-monospace, "Cascadia Mono", Consolas, monospace;
+  clip-path: polygon(0 10px, 10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%);
+  animation: radio-in 0.25s ease-out;
+}
+.trade-head {
+  display: flex; justify-content: space-between; align-items: center;
+  color: #ffd98a; font-weight: 700; font-size: 11px; letter-spacing: 0.1em;
+  text-shadow: 0 0 9px rgba(255, 179, 71, 0.6); margin-bottom: 5px;
+  border-bottom: 1px solid rgba(255, 210, 74, 0.25); padding-bottom: 4px;
+}
+.trade-sec { margin-top: 6px; }
+.trade-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 2px 0; }
+.trade-row.done { opacity: 0.6; }
+.trade-peer { color: #54d2ff; font-weight: 700; }
+.trade-terms { display: flex; flex-direction: column; gap: 1px; color: #cfe8e2; }
+.trade-acts { display: flex; gap: 4px; margin-left: auto; }
+.trade-peer-pick {
+  display: block; width: 100%; text-align: left; margin: 1px 0; padding: 3px 7px;
+  font: inherit; color: #cfe8e2; cursor: pointer;
+  background: rgba(10, 30, 34, 0.55);
+  border: 1px solid rgba(84, 255, 210, 0.25); border-radius: 2px;
+}
+.trade-peer-pick.active {
+  color: #06121e; background: var(--accent); border-color: var(--accent); font-weight: 700;
+}
+.trade-draft { display: flex; gap: 10px; margin: 5px 0; }
+.trade-cred { display: flex; align-items: center; gap: 4px; color: var(--text-dim); }
+.trade-cred input {
+  width: 74px; padding: 2px 5px; font: inherit; color: var(--gold);
+  background: rgba(4, 10, 20, 0.8); border: 1px solid rgba(255, 210, 74, 0.4); border-radius: 2px;
+}
+.trade-good-pick {
+  padding: 2px 5px; font: inherit; color: #cfe8e2;
+  background: rgba(4, 10, 20, 0.8); border: 1px solid rgba(84, 255, 210, 0.35); border-radius: 2px;
+}
+.net-badge {
+  position: absolute; top: -4px; right: -4px; min-width: 14px; padding: 0 3px;
+  font: 700 9px/14px ui-monospace, Consolas, monospace; color: #06121e;
+  background: var(--gold); border-radius: 8px; text-align: center;
+}
+.icon-btn.net-hint { animation: scanPulse 0.9s ease-in-out infinite; }
+/* касса станции (15c): два кармана — кошелёк и серверный счёт */
+.bank-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.bank-card { display: flex; flex-direction: column; gap: 7px; padding: 10px 12px; border: 1px solid rgba(84, 255, 210, 0.2); border-radius: 6px; background: rgba(8, 18, 30, 0.5); }
+.bank-card h4 { margin: 0; font-size: 12px; letter-spacing: 0.14em; color: var(--accent); }
+.bank-sum { font-size: 18px; font-weight: 700; color: var(--gold); font-variant-numeric: tabular-nums; }
+.bank-err { color: var(--danger); font-size: 11px; }
+.bank-note { color: var(--text-dim); font-size: 11px; line-height: 1.45; }
+.bank-quick { display: flex; gap: 5px; flex-wrap: wrap; }
+.bank-amt {
+  width: 110px; padding: 4px 7px; font: inherit; color: var(--gold);
+  background: rgba(4, 10, 20, 0.8); border: 1px solid rgba(255, 210, 74, 0.4); border-radius: 2px;
+}
+
 .login-title {
   margin: 0;
   font-size: 22px;

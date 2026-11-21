@@ -19,6 +19,9 @@ export interface PlayerState {
   a: number;
   sys?: string;
   hull?: string;
+  /** 15c: здоровье для серверной оценки боёв (цель без hp считается со 100 hp). */
+  hp?: number;
+  maxHp?: number;
 }
 
 export interface RemotePlayer {
@@ -54,6 +57,14 @@ export interface TradeEvent {
   t: "trade_done" | "trade_fail" | "trade_declined" | "trade_cancelled";
   id: string;
   reason?: string;
+  /** 15c (трек Б): условия расчёта — сервер кладёт их в trade_done, чтобы
+   *  клиенты перенесли товары между трюмами. У прочих исходов их нет. */
+  from?: string;
+  to?: string;
+  giveCredits?: number;
+  wantCredits?: number;
+  giveGoods?: Record<string, number>;
+  wantGoods?: Record<string, number>;
 }
 
 export interface WorldInfo {
@@ -290,7 +301,17 @@ class WorldNet {
       case "trade_declined":
       case "trade_cancelled": {
         this.tradeOffers.delete(msg.id as string);
-        this.tradeEvents.push({ t: msg.t, id: msg.id as string, reason: msg.reason as string | undefined });
+        const ev: TradeEvent = { t: msg.t, id: msg.id as string, reason: msg.reason as string | undefined };
+        if (msg.t === "trade_done") {
+          // 15c (трек Б): условия нужны обеим сторонам для переноса товаров и зеркальных кредитов
+          ev.from = msg.from as string;
+          ev.to = msg.to as string;
+          ev.giveCredits = (msg.giveCredits as number) || 0;
+          ev.wantCredits = (msg.wantCredits as number) || 0;
+          ev.giveGoods = (msg.giveGoods as Record<string, number>) || {};
+          ev.wantGoods = (msg.wantGoods as Record<string, number>) || {};
+        }
+        this.tradeEvents.push(ev);
         if (this.tradeEvents.length > 50) this.tradeEvents.shift();
         break;
       }

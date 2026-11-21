@@ -249,6 +249,15 @@ export interface GameApi {
   /** Общий шар (15b, трек Б): true — игра рисует чужие корабли и позывные своим
    *  рендером (game.ts/gl.ts); DOM-оверлей net/overlay.ts тогда не дублирует. */
   drawsNetRemotes(): boolean;
+  /** Шард (15c): исходящая сделка игроку; null — проверки на моей стороне не прошли. */
+  netTradeCreate(toId: string, terms: {
+    giveCredits: number; wantCredits: number;
+    giveGoods: Record<string, number>; wantGoods: Record<string, number>;
+  }): string | null;
+  /** Шард (15c): принять входящий оффер (трюм/кошелёк проверяются до отправки). */
+  netTradeAccept(id: string): boolean;
+  /** Шард (15c): зеркало кассы — ±локальные кредиты после успешного банка. */
+  bankAdjust(delta: number): void;
   /** Star chart toggle (M key / HUD button). */
   toggleMap(): void;
   closeMap(): void;

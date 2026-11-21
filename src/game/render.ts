@@ -56,7 +56,11 @@ interface Floater { x: number; y: number; t: number; ttl: number; text: string; 
 
 /** Чужой корабль общего шара (15b): метры игрового мира, текстура уже подкрашена
  *  в оттенок позывного; список собирает game.ts из worldNet перед каждым кадром. */
-export interface RemoteBlip { x: number; y: number; a: number; radius: number; tex: HTMLCanvasElement; name: string; hue: number }
+export interface RemoteBlip {
+  x: number; y: number; a: number; radius: number; tex: HTMLCanvasElement; name: string; hue: number;
+  /** id игрока шарда (15c): по нему молнии игрока летят в sendHit, а фид зовёт позывной. */
+  pid: string;
+}
 
 /** Структурный хозяин кадра: камера, текстуры, пулы сущностей, флаги качества. */
 export interface RenderCtx {

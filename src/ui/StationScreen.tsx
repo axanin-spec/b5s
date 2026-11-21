@@ -1,6 +1,8 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { CLAN_ONLY_GOODS, GOODS, REP, repLabel } from '@/game/config'
 import { gameApi, type StationSnapshot } from '@/game/uiBridge'
+import { deposit, getBalance, withdraw } from '@/net/bank'
+import { getSession } from '@/auth/client'
 import { EquipIcon, GoodIcon } from './GoodIcon'
 
 function fmt(n: number): string {
@@ -17,7 +19,7 @@ function mmss(sec: number): string {
 
 const KIND_NAMES: Record<string, string> = { hunt: 'Охота', transport: 'Доставка', escort: 'Эскорт', bounty: 'Головы' }
 
-type Tab = 'trade' | 'yard' | 'gear' | 'repair' | 'contracts'
+type Tab = 'trade' | 'yard' | 'gear' | 'repair' | 'contracts' | 'bank'
 
 const CAT_NAMES: Record<string, string> = { weapon: 'Орудия', shield: 'Щиты', engine: 'Двигатели' }
 
@@ -34,6 +36,90 @@ function RepBar({ name, v }: { name: string; v: number }) {
         <i className="rep-fill" style={{ left: `${left}%`, width: `${width}%` }} />
       </div>
       <span className="rep-label">{repLabel(v)}</span>
+    </div>
+  )
+}
+
+/**
+ * Касса (Этап 15c, трек Б): перекидываем ₡ между кошельком в сейве и серверным
+ * счётом (ledger). Сервер ведёт расчёты шара по счёту, поэтому кошелёк в рейде
+ * — наличные, счёт — то, чем платят сделки. Снятие ограничено 500k/час на сервере.
+ */
+function BankTab({ s }: { s: StationSnapshot }) {
+  const session = useMemo(getSession, [])
+  const [balance, setBalance] = useState<number | null>(null)
+  const [amount, setAmount] = useState('1000')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+
+  const refresh = useCallback(async () => {
+    if (!session) return
+    try { setBalance((await getBalance(session)).player) } catch { setBalance(null) }
+  }, [session])
+  useEffect(() => { void refresh() }, [refresh])
+
+  if (!session) {
+    return <div className="bank-note">Касса работает с подключённым сервером: войдите в аккаунт и причальте заново.</div>
+  }
+
+  const n = Math.max(0, Math.floor(Number(amount) || 0))
+  const move = async (dir: 'in' | 'out') => {
+    if (!n || busy || !session) return
+    setBusy(true)
+    setErr(null)
+    try {
+      if (dir === 'in') {
+        await deposit(session, n)
+        gameApi.current?.bankAdjust(-n) // зеркало: кошелёк худеет вместе со списанием
+      } else {
+        await withdraw(session, n)
+        gameApi.current?.bankAdjust(n)
+      }
+      await refresh()
+    } catch (e) {
+      setErr(`Отказ сервера: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const quick = (v: number) => setAmount(String(Math.max(0, Math.floor(v))))
+
+  return (
+    <div className="bank-grid">
+      <div className="bank-card">
+        <h4>КОШЕЛЁК</h4>
+        <div className="bank-sum">₡ {fmt(s.credits)}</div>
+        <div className="bank-note">Наличные в сейве: верфь, рынки, ремонт. В шаре ими не платят.</div>
+      </div>
+      <div className="bank-card">
+        <h4>СЧЁТ СТАНЦИИ</h4>
+        <div className="bank-sum">{balance === null ? '—' : `₡ ${fmt(balance)}`}</div>
+        <div className="bank-note">
+          {balance === null ? 'Сервер молчит — касса недоступна.' : 'С этого счёта идут сделки с игроками.'}
+        </div>
+      </div>
+      <div className="bank-card" style={{ gridColumn: '1 / -1' }}>
+        <h4>ПЕРЕЛОЖИТЬ</h4>
+        <div className="bank-quick">
+          <input className="bank-amt" type="number" min={0} value={amount} onChange={(e) => setAmount(e.target.value)} />
+          <button className="mini-btn" onClick={() => quick(1000)}>1k</button>
+          <button className="mini-btn" onClick={() => quick(10000)}>10k</button>
+          <button className="mini-btn" onClick={() => quick(100000)}>100k</button>
+          <button className="mini-btn" onClick={() => quick(s.credits)}>всё наличное</button>
+          {balance !== null && <button className="mini-btn" onClick={() => quick(balance)}>всё со счёта</button>}
+        </div>
+        <div className="bank-quick">
+          <button className="btn btn-primary" disabled={busy || !n || n > s.credits} onClick={() => void move('in')}>
+            Пополнить счёт — ₡ {fmt(n)}
+          </button>
+          <button className="btn" disabled={busy || !n || (balance ?? 0) < n} onClick={() => void move('out')}>
+            Снять в кошелёк — ₡ {fmt(n)}
+          </button>
+        </div>
+        {err && <div className="bank-err">{err}</div>}
+        <div className="bank-note">Снятие со счёта ограничено 500k в час — анти-абьюз до серверной валидации событий.</div>
+      </div>
     </div>
   )
 }
@@ -66,6 +152,7 @@ export function StationScreen({ s }: { s: StationSnapshot }) {
           <button className={`tab ${tab === 'yard' ? 'active' : ''}`} onClick={() => setTab('yard')}>Верфь</button>
           <button className={`tab ${tab === 'gear' ? 'active' : ''}`} onClick={() => setTab('gear')}>Снаряжение</button>
           <button className={`tab ${tab === 'repair' ? 'active' : ''}`} onClick={() => setTab('repair')}>Ремонт</button>
+          <button className={`tab ${tab === 'bank' ? 'active' : ''}`} onClick={() => setTab('bank')}>Касса</button>
         </nav>
 
         <div className="station-body">
@@ -328,6 +415,8 @@ export function StationScreen({ s }: { s: StationSnapshot }) {
               )}
             </div>
           )}
+
+          {tab === 'bank' && <BankTab s={s} />}
         </div>
 
         <footer className="station-footer">

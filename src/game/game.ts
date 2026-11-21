@@ -29,6 +29,7 @@ import {
   mulberry32, remoteHue, remoteShipColors,
 } from "./textures";
 import { worldNet } from "../net/world";
+import type { CombatEvent, TradeEvent } from "../net/world";
 import type { SystemDef } from "./config";
 import { loadImage, loadPlanetTexture, loadStationTexture, planetVariant } from "./assets";
 import { basePriceOf, economyTick, findDockTarget, generateWorld, kindName, priceOf, refreshAllPrices, updateOrbits } from "./world";
@@ -161,6 +162,14 @@ export class Game {
   private remoteTexCache = new Map<string, HTMLCanvasElement>();
   /** Раздатчик своего state в шард: 10 Гц (интервал worldNet тот же). */
   private netT = 0;
+  /** Слушатель событий шарда (15c): входящие попадания/смерти и расчёты сделок;
+   *  снимается вместе с игрой. Пока worldNet офлайн — emit не бывает, ноль эффекта. */
+  private unsubNet: (() => void) | null = null;
+  /** Курсоры разобранных событий — по ссылке на объект (логи скользящие, индексы плывут). */
+  private netLastCombat: CombatEvent | null = null;
+  private netLastTrade: TradeEvent | null = null;
+  /** id входящих офферов, уже отмеченные в фиде (15c) — чтобы не пищать повторно. */
+  private knownOffers = new Set<string>();
   /** Kill/event feed lines for the HUD column (game feel); they age out with the player clock. */
   private feed: { id: number; text: string; cls: "info" | "gold" | "bad"; t: number }[] = [];
   private feedId = 1;
@@ -336,6 +345,9 @@ export class Game {
     // 12d: настройка render (localStorage, вне сейва) — применяется на старте и живьём из панели
     this.unsubRender = onSettingsChange((s) => this.applyRender(s.render));
     this.applyRender(loadSettings().render);
+
+    // 15c: боевые и торговые события шарда приходят через emit транспорта
+    this.unsubNet = worldNet.subscribe(() => this.onNetTick());
   }
 
   private onResizeBound = () => this.onResize();
@@ -1553,11 +1565,166 @@ export class Game {
         out.push({
           x: s.x * WORLD_CFG.HALF, y: s.y * WORLD_CFG.HALF, a: s.a,
           radius: HULLS[hullIdx].radius, tex: this.remoteTex(hullIdx, hue),
-          name: pl.username, hue,
+          name: pl.username, hue, pid: pl.id,
         });
       }
     }
     this.remotes = out;
+  }
+
+  /* ================================================================== */
+  /* Shard events (Этап 15c): PvP и расчёты сделок игроков              */
+  /* ================================================================== */
+
+  /** worldNet вызывает на каждый emit: в каждый лог сообщение добавляет ≤1 событие,
+   *  поэтому курсор — просто «последний объект уже разобран». */
+  private onNetTick(): void {
+    const cl = worldNet.combatLog;
+    const lastC = cl.length ? cl[cl.length - 1] : null;
+    if (lastC && lastC !== this.netLastCombat) {
+      this.netLastCombat = lastC;
+      this.applyNetCombat(lastC);
+    }
+    const tl = worldNet.tradeEvents;
+    const lastT = tl.length ? tl[tl.length - 1] : null;
+    if (lastT && lastT !== this.netLastTrade) {
+      this.netLastTrade = lastT;
+      this.applyNetTrade(lastT);
+    }
+    // новые входящие офферы сразу светятся в фиде — бейдж кнопки торговли ведёт туда
+    for (const off of worldNet.tradeOffers.values()) {
+      if (this.knownOffers.has(off.id)) continue;
+      this.knownOffers.add(off.id);
+      this.pushFeed(`🤝 ${off.fromName} предлагает сделку`);
+      uiBridge.set({ feed: this.feedView() });
+    }
+    for (const id of this.knownOffers) if (!worldNet.tradeOffers.has(id)) this.knownOffers.delete(id);
+  }
+
+  /** Входящий бой шарда: hit — по моему борту (щит гасит как обычно), kill — стандартный
+   *  сценарий гибели. Днищем в docked: там сервер сам вернёт меня в строй следующим state. */
+  private applyNetCombat(ev: CombatEvent): void {
+    if (ev.t === "hit") {
+      if (ev.id !== worldNet.selfId || this.sm.state !== "playing") return;
+      this.damageShip(0, Math.max(1, Math.round(ev.dmg || 0)), false);
+      return;
+    }
+    if (ev.t === "kill") {
+      if (ev.id === worldNet.selfId) {
+        if (this.sm.state !== "playing" || !this.ships[0].active) return; // утонул локально раньше — поток отработан
+        const name = worldNet.players.get(ev.by ?? "")?.username ?? "соперник";
+        this.setNews(`☠ Вас уничтожил ${name}!`);
+        this.killShip(0, false); // взрыв + экран конца — тот же путь, что после NPC-залпа
+        return;
+      }
+      if (ev.by === worldNet.selfId) {
+        const name = worldNet.players.get(ev.id)?.username ?? "соперник";
+        this.pushFeed(`☠ Вы уничтожили ${name}!`);
+        uiBridge.set({ feed: this.feedView() });
+      }
+      return;
+    }
+    // respawn: транспорт сам снимает dead с ростера — силуэт вернётся на экран сам
+  }
+
+  /** Расчёт сделки (15c): товары переходят между трюмами (что не влезло — за бортом),
+   *  кредиты двигаются зеркально. Кредиты в шаре платятся не из локальных пулов, а из
+   *  серверного ledger, поэтому локальный ₡-инвариант не при чём: деньги внешние. */
+  private applyNetTrade(ev: TradeEvent): void {
+    if (ev.t !== "trade_done" || !ev.from || !ev.to) return;
+    const me = worldNet.selfId;
+    if (!me) return;
+    const isFrom = ev.from === me;
+    if (!isFrom && ev.to !== me) return; // чужая сделка — просто событие в ленте
+    const give = (isFrom ? ev.giveGoods : ev.wantGoods) ?? {};
+    const recv = (isFrom ? ev.wantGoods : ev.giveGoods) ?? {};
+    const cargo = this.player.cargo;
+    for (const [g, q] of Object.entries(give)) {
+      const left = (cargo[g] ?? 0) - q;
+      if (left > 0) cargo[g] = left;
+      else delete cargo[g];
+    }
+    let free = this.cargoMax() - this.cargoUsed();
+    let spilled = 0;
+    for (const [g, q] of Object.entries(recv)) {
+      const put = Math.min(q, Math.max(0, free));
+      if (put > 0) { cargo[g] = (cargo[g] ?? 0) + put; free -= put; }
+      spilled += q - put;
+    }
+    const net = Math.round(isFrom
+      ? -(ev.giveCredits ?? 0) + (ev.wantCredits ?? 0)
+      : (ev.giveCredits ?? 0) - (ev.wantCredits ?? 0));
+    this.player.credits = Math.max(0, this.player.credits + net);
+    const peer = worldNet.players.get(isFrom ? ev.to : ev.from)?.username ?? "соперник";
+    this.setNews(net === 0
+      ? `🤝 Сделка с ${peer} закрыта${spilled ? ", часть груза не влезла в трюм" : ""}.`
+      : `🤝 Сделка с ${peer} закрыта: ${net > 0 ? "+" : "−"}₡${Math.abs(net)}`);
+    const p = this.ships[0];
+    if (net !== 0 && p.active) this.floater(p.x, p.y, `${net > 0 ? "+" : "−"}₡${Math.abs(net)}`, "#ffd24a");
+    if (this.sm.state === "docked") this.pushStatic();
+  }
+
+  /** Исход сделки для игрока; false + строка новости, если проверить не прошли. */
+  private netTradeCheck(giveCredits: number, wantGoodsQty: number, giveGoods: Record<string, number>): string | null {
+    if (giveCredits > Math.floor(this.player.credits)) return "Не хватает кредитов в кошельке для сделки.";
+    if (wantGoodsQty > this.cargoMax() - this.cargoUsed()) return "Принять нечего: трюм забит.";
+    for (const [g, q] of Object.entries(giveGoods)) {
+      if ((this.player.cargo[g] ?? 0) < q) {
+        const name = GOODS.find((d) => d.id === g)?.name ?? g;
+        return `В трюме нет столько: ${name}.`;
+      }
+    }
+    return null;
+  }
+
+  /** 15c: исходящая сделка — проверки на моей стороне, затем оффер в шард. null = отказ. */
+  netTradeCreate(toId: string, terms: {
+    giveCredits: number; wantCredits: number;
+    giveGoods: Record<string, number>; wantGoods: Record<string, number>;
+  }): string | null {
+    if (worldNet.status !== "online" || worldNet.selfId === null) return null;
+    const tidy = (g: Record<string, number>) => {
+      const o: Record<string, number> = {};
+      for (const [k, v] of Object.entries(g)) {
+        const q = Math.max(0, Math.round(v || 0));
+        if (q > 0) o[k] = q;
+      }
+      return o;
+    };
+    const giveCredits = Math.max(0, Math.round(terms.giveCredits || 0));
+    const wantCredits = Math.max(0, Math.round(terms.wantCredits || 0));
+    const giveGoods = tidy(terms.giveGoods);
+    const wantGoods = tidy(terms.wantGoods);
+    if (!giveCredits && !wantCredits && !Object.keys(giveGoods).length && !Object.keys(wantGoods).length) {
+      this.setNews("Пустое предложение — нечего ни дать, ни взять.");
+      return null;
+    }
+    const wantQty = Object.values(wantGoods).reduce((a, b) => a + b, 0);
+    const why = this.netTradeCheck(giveCredits, wantQty, giveGoods);
+    if (why) { this.setNews(why); return null; }
+    return worldNet.sendTradeOffer(toId, { giveCredits, wantCredits, giveGoods, wantGoods });
+  }
+
+  /** 15c: принять входящий оффер — сначала своя сторона (трюм под принятие, кошелёк под уплату). */
+  netTradeAccept(id: string): boolean {
+    const off = worldNet.tradeOffers.get(id);
+    if (!off || worldNet.status !== "online") return false;
+    const recvQty = Object.values(off.giveGoods).reduce((a, b) => a + b, 0);
+    const why = this.netTradeCheck(off.wantCredits, recvQty, off.wantGoods);
+    if (why) { this.setNews(why); return false; }
+    worldNet.acceptTrade(id);
+    return true;
+  }
+
+  /** 15c: зеркало кассы — на успешный deposit/withdraw сервера реагируем локальными ₡. */
+  bankAdjust(delta: number): void {
+    const d = Math.round(delta);
+    if (!d) return;
+    this.player.credits = Math.max(0, this.player.credits + d);
+    const p = this.ships[0];
+    if (p.active) this.floater(p.x, p.y, `${d > 0 ? "+" : "−"}₡${Math.abs(d)}`, "#ffd24a");
+    if (this.sm.state === "docked") this.pushStatic();
+    this.saveNow();
   }
 
   /* ================================================================== */
@@ -2303,6 +2470,8 @@ export class Game {
         worldNet.setState({
           x: me.x / WORLD_CFG.HALF, y: me.y / WORLD_CFG.HALF, a: me.angle,
           sys: this.systemDef.name, hull: this.player.ship,
+          // 15c: сервер по этим числам ведёт оценку боёв (без hp цель = 100 hp)
+          hp: Math.round(me.hp), maxHp: Math.round(me.maxHp),
         });
       }
     }
@@ -3192,6 +3361,20 @@ export class Game {
         this.damageShip(i, b.dmg, b.friendly, b.src);
         break;
       }
+
+      // PvP (15c): наши трассеры пробивают и чужие корабли шарда. Сервер верифицирует
+      // попадание и рассылает hit всем; деньги бой не двигает — только ledger-счёта.
+      if (b.active && b.friendly && this.remotes.length) {
+        for (const rem of this.remotes) {
+          const rr = rem.radius + BOLT_CFG.RADIUS;
+          if (Math.abs(rem.x - b.x) > rr || Math.abs(rem.y - b.y) > rr) continue;
+          if (Math.hypot(rem.x - b.x, rem.y - b.y) > rr) continue;
+          b.active = false;
+          this.emit(b.x, b.y, 0, 0, 0.25, 2, 7);
+          worldNet.sendHit(rem.pid, Math.round(b.dmg));
+          break;
+        }
+      }
     }
   }
 
@@ -3699,6 +3882,10 @@ export class Game {
       },
       // 15b (трек Б): игра сама рисует чужие корпуса и позывные — DOM-оверлею молчать
       drawsNetRemotes: () => true,
+      // 15c (трек Б): сделки игроков и зеркало кассы
+      netTradeCreate: (toId, terms) => this.netTradeCreate(toId, terms),
+      netTradeAccept: (id) => this.netTradeAccept(id),
+      bankAdjust: (delta) => this.bankAdjust(delta),
       toggleMap: () => this.toggleMap(),
       closeMap: () => this.closeMap(),
       setWaypoint: (kind, id) => this.setWaypoint(kind, id),
@@ -3902,10 +4089,32 @@ export class Game {
         sys: this.systemDef.name,
         hull: this.player.ship,
         remotes: this.remotes.map((r) => ({
-          name: r.name, hue: r.hue, radius: r.radius,
+          name: r.name, hue: r.hue, radius: r.radius, pid: r.pid,
           x: Math.round(r.x), y: Math.round(r.y), a: Math.round(r.a * 100) / 100,
         })),
       }),
+      // 15c зонды: событие шарда «как от сервера» — в лог transport'а и сразу в обработку
+      fakeCombat: (ev: { t: "hit" | "kill" | "respawn"; id: string; from?: string; by?: string; dmg?: number; hp?: number }) => {
+        const full: CombatEvent = { ...ev };
+        worldNet.combatLog.push(full);
+        if (worldNet.combatLog.length > 100) worldNet.combatLog.shift();
+        this.netLastCombat = full;
+        this.applyNetCombat(full);
+        const p = this.ships[0];
+        return { hp: p.hp, shield: p.shield, active: p.active };
+      },
+      fakeTrade: (ev: {
+        t: "trade_done"; id: string; from: string; to: string;
+        giveCredits?: number; wantCredits?: number;
+        giveGoods?: Record<string, number>; wantGoods?: Record<string, number>;
+      }) => {
+        const full: TradeEvent = { ...ev };
+        worldNet.tradeEvents.push(full);
+        if (worldNet.tradeEvents.length > 50) worldNet.tradeEvents.shift();
+        this.netLastTrade = full;
+        this.applyNetTrade(full);
+        return { credits: this.player.credits, cargo: { ...this.player.cargo } };
+      },
       // отладочный ростер (net-test): подсовывает worldNet чужих игроков без сервера
       fakePlayers: (arr: { id: string; username: string; x: number; y: number; a: number; sys?: string; hull?: string; dead?: boolean }[] | null, selfId?: string) => {
         if (arr === null) return { count: worldNet.players.size };
@@ -4153,6 +4362,8 @@ export class Game {
     window.removeEventListener("resize", this.onResizeBound);
     this.unsubRender?.();
     this.unsubRender = null;
+    this.unsubNet?.();
+    this.unsubNet = null;
     this.input.dispose();
     this.audio.dispose();
     this.disable3d(); // снять GL-слои «шубы» (12a) вместе с игрой
