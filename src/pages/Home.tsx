@@ -10,6 +10,8 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react'
 import { startGame, stopGame } from '@/game/boot'
 import { uiBridge } from '@/game/uiBridge'
+import { startNetBridge, stopNetBridge } from '@/net/bridge'
+import { startNetOverlay } from '@/net/overlay'
 import { TitleScreen } from '@/ui/TitleScreen'
 import { Hud } from '@/ui/Hud'
 import { StarMap } from '@/ui/StarMap'
@@ -34,7 +36,14 @@ export default function Home() {
     const canvas = canvasRef.current
     if (!canvas) return
     startGame(canvas)
-    return () => stopGame()
+    // общий шард (15b): отправка позиции + оверлей чужих кораблей; game.ts не меняется
+    startNetBridge()
+    const stopOverlay = startNetOverlay(canvas.parentElement!)
+    return () => {
+      stopNetBridge()
+      stopOverlay()
+      stopGame()
+    }
   }, [])
 
   return (

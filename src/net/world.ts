@@ -184,3 +184,8 @@ class WorldNet {
 }
 
 export const worldNet = new WorldNet();
+
+// Отладочный доступ из консоли/E2E (только чтение состояния; не API игры).
+if (typeof window !== "undefined") {
+  (window as unknown as { __worldNet: WorldNet }).__worldNet = worldNet;
+}

@@ -3,7 +3,7 @@
  * Показывается до старта игры; успешный вход отдаёт Session наверх в App.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ApiError, login, register, type Session } from "@/auth/client";
 
 const ERROR_TEXT: Record<string, string> = {
@@ -19,6 +19,12 @@ export function Login({ onLogin }: { onLogin: (s: Session) => void }) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // Сплэш первой загрузки снимается игрой при старте рендера; на экране входа
+  // игры ещё нет — убираем сами, иначе он перекрывает форму.
+  useEffect(() => {
+    document.getElementById("boot-splash")?.remove();
+  }, []);
 
   const submit = async (mode: "login" | "register") => {
     if (busy) return;

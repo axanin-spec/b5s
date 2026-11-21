@@ -232,6 +232,14 @@ kbd {
 .hud-line { color: var(--text-dim); margin-top: 2px; }
 .hud-outlaw { color: var(--danger); font-weight: 700; margin-top: 4px; font-size: 12px; letter-spacing: 0.08em; }
 
+/* патрульный досмотр (Этап 14d): мигалок таможни поверх HUD */
+.hud-scan {
+  color: #58e1ff; font-weight: 700; margin-top: 4px; font-size: 12px; letter-spacing: 0.08em;
+  text-shadow: 0 0 10px rgba(88, 225, 255, 0.6);
+  animation: scanPulse 0.9s ease-in-out infinite;
+}
+@keyframes scanPulse { 50% { opacity: 0.45; } }
+
 /* доля в экономике Галактики — полоска экономической победы (Этап 5a) */
 .hud-share { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
 .share-track {
@@ -1315,12 +1323,4 @@ kbd {
   font-size: 15px;
   letter-spacing: 0.06em;
   background: #04060d;
-}
-
-/* ============================ net overlay (Этап 15b) ============================ */
-
-#net-overlay {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
 }
