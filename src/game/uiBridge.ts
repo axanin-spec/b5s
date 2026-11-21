@@ -25,6 +25,8 @@ export interface HudData {
   wanted: boolean;
   /** Atonement pirate-kills counted toward lifting an active wanted flag. */
   pardons: number;
+  /** Досмотр (14d): прогресс канала таможни на игроке, 0 — не сканируют, 1 — трюм вскрыли. */
+  scan: number;
   /** Current star system. */
   systemName: string;
   /** Dockable body currently in docking range (name), else null. */
@@ -235,6 +237,8 @@ export interface GameApi {
   cancelContract(): void;
   /** Pay the patrol tribunal: clears the wanted flag, restores patrol standing. */
   payFine(): void;
+  /** Аварийный сброс (14d): выбросить контрабанду за борт под сканером досмотра. */
+  jettison(): void;
   /** Radio deal (5b): buy qty units from the caravan at shipIdx, money player→wallet. */
   radioBuy(shipIdx: number, goodId: string, qty: number): void;
   /** Radio deal (5b): sell qty units to the caravan, money wallet→player. */

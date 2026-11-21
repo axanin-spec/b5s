@@ -10,7 +10,7 @@
  * 2D-режим рисует все проходы на одном канвасе в прежнем порядке.
  */
 
-import { GATE_CFG, QUALITY, RAID, WORLD_CFG } from "./config";
+import { GATE_CFG, INSPECT, QUALITY, RAID, WORLD_CFG } from "./config";
 import type { Bolt, Dockable, Pickup, Ship } from "./types";
 import type { ParallaxLayer } from "./game";
 import { perf } from "./perf";
@@ -454,6 +454,27 @@ export function drawAnnotations(c: RenderCtx, ctx: CanvasRenderingContext2D): vo
       circleWorld(c, ctx, s.x, s.y, s.radius + 10 / c.ppu, 0, Math.PI * 2);
       ctx.stroke();
       ctx.setLineDash([]);
+    }
+    /* patrol customs (Этап 14d): луч досмотра — пунктирная нить катера к борту
+     * и дуга-прогресс над проверяемым: дочитает трюм до конца круга — держи карман */
+    if (s.faction === "patrol" && s.scanIdx >= 0 && s.scanT > 0) {
+      const t = c.ships[s.scanIdx];
+      if (t && t.active) {
+        const q = pt(c, t.x, t.y);
+        ctx.strokeStyle = "rgba(88,225,255,0.75)";
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([6, 6]);
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(q.x, q.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        const frac = Math.max(0, Math.min(1, s.scanT / INSPECT.TIME));
+        ctx.strokeStyle = "#58e1ff";
+        ctx.lineWidth = 3;
+        circleWorld(c, ctx, t.x, t.y, t.radius + 14 / c.ppu, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2);
+        ctx.stroke();
+      }
     }
   }
 }

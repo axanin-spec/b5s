@@ -69,6 +69,12 @@ export interface Ship {
   callT: number;
   /** Катер: индекс каравана, к которому спешит по вызову, -1 = вызова нет. */
   callIdx: number;
+  /** Досмотр (Этап 14d): индекс проверяемого борта у катера-таможенника, -1 = канал закрыт. */
+  scanIdx: number;
+  /** Катер: секунды, накопленные каналом досмотра (порог — INSPECT.TIME). */
+  scanT: number;
+  /** Катер: пауза перед следующим досмотром (INSPECT.CD после сделки, RETRY_CD после побега). */
+  inspectCd: number;
   /** Convoy-raid event this ship belongs to (event id, -1 = none). */
   raidId: number;
   /** Member of the flagship's escort screen (Этап 11a) — its wreck drops real gear. */

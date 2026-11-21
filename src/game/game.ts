@@ -7,7 +7,7 @@
 
 import {
   BOLT_CFG, BLACK_STREET, CLAN_ONLY_GOODS, CONTRACTS, CONVOY, ECONOMY, EMERGENCY_PULSE, EQUIP, EQUIP_LINES, EQUIP_SELL, FACTION_CFG, GATE_CFG, GOODS, HULLS, HULL_SELL, MODULE_LOOT, OCCUPATION, PATROL_ECON, PIRATE_BRANCH, PIRATE_ECON, PLAYER_CFG, POPULATION, QUALITY, RANKS, RAID,
-  MONEY_TOTAL, POOLS, REPAIR_COST_PER_HP, REP, SAVE_VERSION, AUTOSAVE_INTERVAL, SMUGGLER, STARTER_KIT, SYSTEMS, TRADER_AI, TRADER_GUILD, TRADER_TIERS,
+  MONEY_TOTAL, POOLS, REPAIR_COST_PER_HP, REP, SAVE_VERSION, AUTOSAVE_INTERVAL, SMUGGLER, STARTER_KIT, SYSTEMS, TRADER_AI, TRADER_GUILD, TRADER_TIERS, INSPECT, CONTRABAND_GOODS,
   VICTORY_SHARE, WORLD_CFG,
 } from "./config";
 import type { EquipCat, EquipItem, HullDef, HullId, YardTier } from "./config";
@@ -59,6 +59,8 @@ function blankShip(): Ship {
     angerIdx: -1, angerT: 0, tier: 0, escort: false, escortOf: -1,
     // 14b: гильдейская повинность — отсчёт прибыли, сигнал бедствия, ответ катера
     voyStart: 0, callCd: 0, callT: 0, callIdx: -1,
+    // 14d: таможный канал — катер ведёт досмотр, цель и пауза между проверками
+    scanIdx: -1, scanT: 0, inspectCd: 0,
   };
 }
 
@@ -812,6 +814,122 @@ export class Game {
       this.callNewsT = 18;
       this.setNews(`«${s.name}» вызывает патруль: под ударом на маршруте`);
     }
+  }
+
+  /* ================================================================== */
+  /* Патрульный досмотр (Этап 14d): таможня на воде                       */
+  /* ================================================================== */
+
+  /** Тонны улик (CONTRABAND_GOODS) в трюме — то, что ищет канал досмотра. */
+  private contrabandTons(s: Ship): number {
+    let n = 0;
+    for (const gid of CONTRABAND_GOODS) n += Math.round(s.cargo[gid] ?? 0);
+    return n;
+  }
+
+  /** 14d: игрок-улики: трюм живёт в player.cargo (в пуловом грузу катера его нет). */
+  private playerContrabandTons(): number {
+    let n = 0;
+    for (const gid of CONTRABAND_GOODS) n += Math.round(this.player.cargo[gid] ?? 0);
+    return n;
+  }
+
+  /**
+   * 14d: кандидат на досмотр в радиусе канала — бортник с контрабандой или игрок
+   * с уликой в трюме, ближайший к катеру. Изгою канал не ведут: у него с патрулём
+   * уже война, а не таможня. Улики читаются в момент досмотра, а не при захвате
+   * канала — успел сбросить за борт [X], трюм чист.
+   */
+  private pickInspection(s: Ship): number {
+    if (s.inspectCd > 0) return -1;
+    let best = -1, bestD: number = INSPECT.RANGE;
+    for (let j = 1; j < MAX_SHIPS; j++) {
+      const o = this.ships[j];
+      if (!o.active || o.faction !== "trader" || !o.smuggler) continue;
+      if (this.contrabandTons(o) <= 0) continue;
+      const d = Math.hypot(o.x - s.x, o.y - s.y);
+      if (d < bestD) { bestD = d; best = j; }
+    }
+    const p = this.ships[0];
+    if (!this.patrolHostile() && p.active && this.sm.state === "playing" && this.playerContrabandTons() > 0) {
+      const d = Math.hypot(p.x - s.x, p.y - s.y);
+      if (d < bestD) best = 0;
+    }
+    return best;
+  }
+
+  /**
+   * 14d: канал дочитал трюм. Бортник — расстрел на месте: кошелёк до последнего
+   * кредита уходит в казну патруля (груз разойдётся поддонами, как при любом
+   * крушении — поддоны это товар, не деньги). Игрок — конфискация улик, штраф
+   * в казну и репутационный удар; addRep сам поднимет розыск, если терпение
+   * патруля лопнуло. Пустой трюм (сбросили в окне скана) — отпускают молча.
+   */
+  private resolveInspection(tIdx: number): void {
+    const t = this.ships[tIdx];
+    if (!t || !t.active) return;
+    if (tIdx === 0) {
+      let tons = 0, value = 0;
+      const ref = this.dockables.find((d) => d.isStation) ?? this.dockables[0];
+      for (const gid of CONTRABAND_GOODS) {
+        const q = Math.round(this.player.cargo[gid] ?? 0);
+        if (q <= 0) continue;
+        tons += q;
+        if (ref) value += q * Math.max(1, Math.round(basePriceOf(ref, gid)));
+        this.player.cargo[gid] = 0;
+      }
+      this.pushHud();
+      if (tons <= 0) {
+        this.setNews("Досмотр: трюм чист. Патруль возвращает вам ваш же воздух и отпускает.");
+        return;
+      }
+      const fine = Math.max(INSPECT.FINE_MIN, Math.round(value * INSPECT.FINE_FACTOR));
+      const paid = Math.min(fine, Math.max(0, Math.floor(this.player.credits)));
+      if (paid > 0) this.pay(paid, "patrol");
+      this.addRep({ patrol: -INSPECT.REP_HIT });
+      this.audio.sfx("alarm");
+      this.setNews(`⚑ Досмотр: конфисковано ${tons} т контрабанды, штраф ₡${paid.toLocaleString("ru-RU")} в казну патруля.${this.patrolHostile() ? " ☠ Патруль объявил на вас розыск!" : " Патруль ведёт на вас разработку."}`);
+      return;
+    }
+    const tons = this.contrabandTons(t);
+    if (tons <= 0) return; // страховка: без улик судить не за что
+    const w = Math.round(t.wallet);
+    if (w > 0) { t.wallet -= w; this.pools.patrol += w; }
+    this.setNews(`⚑ Досмотр: у бортника «${t.name}» нашли ${tons} т контрабанды. Судно уничтожено, кошелёк ₡${w.toLocaleString("ru-RU")} ушёл в казну патруля.`);
+    this.killShip(tIdx, false);
+  }
+
+  /** Прогресс канала досмотра на игроке: 0 — не сканируют, 1 — трюм вскрыли (14d). */
+  private scanProgress(): number {
+    for (const s of this.ships) {
+      if (s.active && s.faction === "patrol" && s.scanIdx === 0 && s.scanT > 0) {
+        return Math.min(1, s.scanT / INSPECT.TIME);
+      }
+    }
+    return 0;
+  }
+
+  /**
+   * 14d: аварийный сброс груза — выбросить всю контрабанду поддонами, пока сканер
+   * дочитывает трюм. Возвращает брошенные тонны; поддоны потом можно подобрать.
+   */
+  jettison(): number {
+    const p = this.ships[0];
+    if (this.sm.state !== "playing" || !p.active) return 0;
+    let tons = 0;
+    for (const gid of CONTRABAND_GOODS) {
+      const q = Math.round(this.player.cargo[gid] ?? 0);
+      if (q <= 0) continue;
+      tons += q;
+      this.player.cargo[gid] = 0;
+      this.spawnPickup("cargo", gid, q, p.x + (this.rnd() - 0.5) * 160, p.y + (this.rnd() - 0.5) * 160);
+    }
+    if (tons > 0) {
+      this.audio.sfx("pickup");
+      this.setNews(`Аварийный сброс: ${tons} т улик за бортом — пусть патруль ныряет.`);
+      this.pushHud();
+    }
+    return tons;
   }
 
   /** Closest caravan on the radio band, -1 = none in range (Этап 5b). */
@@ -2262,6 +2380,9 @@ export class Game {
     }
     if (this.jumpGrace > 0) this.jumpGrace -= dt;
 
+    // 14d: аварийный сброс контрабанды — окно под сканером таможни и вообще любая спешка
+    if (this.input.consumeAction("KeyX")) this.jettison();
+
     // 14b: сводки караванов протухают — устаревшая наводка уходит из ордера патруля
     if (this.pirateMarks.size) {
       for (const [j, ttl] of this.pirateMarks) {
@@ -2744,6 +2865,27 @@ export class Game {
           return;
         }
       }
+      // 14d: таможня на воде. Свободный катер ведёт канал досмотра: скан висит на
+      // подозреваемом борту INSPECT.TIME секунд — за это время можно уйти за LEASH·RANGE
+      // или сбросить улики за борт [X]. Пока канал открыт, катер не воюет и не воет на вызовы.
+      if (s.inspectCd > 0) s.inspectCd -= dt;
+      if (s.scanIdx >= 0) {
+        const t = this.ships[s.scanIdx];
+        const dd = t && t.active ? Math.hypot(t.x - s.x, t.y - s.y) : Infinity;
+        if (!t || !t.active || dd > INSPECT.RANGE * INSPECT.LEASH || this.sm.state !== "playing") {
+          s.scanIdx = -1; s.scanT = 0; s.inspectCd = INSPECT.RETRY_CD; // сорвалось: цель ушла
+        } else {
+          s.targetIdx = -1;
+          s.ai = AiState.Chase;
+          s.tx = t.x; s.ty = t.y;
+          s.scanT += dt;
+          if (s.scanT >= INSPECT.TIME) {
+            this.resolveInspection(s.scanIdx);
+            s.scanIdx = -1; s.scanT = 0; s.inspectCd = INSPECT.CD;
+          }
+          return;
+        }
+      }
       // 14b: ответ на сигнал бедствия — катер с активным вызовом спешит к каравану;
       // если обидчик всё ещё крутится возле него, берёт в наводку его самого
       if (s.callT > 0) {
@@ -2796,6 +2938,20 @@ export class Game {
         s.ai = AiState.Chase;
         s.tx = this.ships[best].x; s.ty = this.ships[best].y;
       } else {
+        // 14d: катер без работы — ищет, кого брать на досмотр: бортника с контрабандой
+        // или игрока с уликой в трюме (изгою патруль канал не ведёт — у него и так война)
+        const cand = this.pickInspection(s);
+        if (cand >= 0) {
+          s.scanIdx = cand; s.scanT = 0;
+          s.targetIdx = -1;
+          s.ai = AiState.Chase;
+          s.tx = this.ships[cand].x; s.ty = this.ships[cand].y;
+          if (cand === 0) {
+            this.audio.sfx("alarm");
+            this.setNews("⦿ Патруль повёл канал досмотра: «ВАС СКАНИРУЮТ» — уходите за радиус или сбрасывайте контрабанду [X].");
+          }
+          return;
+        }
         s.targetIdx = -1;
         s.ai = AiState.Wander;
         s.wanderT -= dt;
@@ -3163,6 +3319,8 @@ export class Game {
       rep: { ...this.player.rep },
       wanted: this.patrolHostile(),
       pardons: this.player.pardons,
+      // 14d: прогресс канала досмотра на игроке (0 — не сканируют, 1 — трюм вскрыли)
+      scan: this.scanProgress(),
       systemName: this.systemDef.name,
       // under the raid embargo the terminal prompt is replaced by the operation line (5d)
       dockName: this.dockTarget && this.sm.state === "playing" && !this.raidHot() ? this.dockTarget.name : null,
@@ -3417,6 +3575,7 @@ export class Game {
       acceptContract: (id) => this.acceptContract(id),
       cancelContract: () => this.cancelContract(),
       payFine: () => this.payFine(),
+      jettison: () => { this.jettison(); },
       radioBuy: (i, g, q) => { this.radioBuy(i, g, q); },
       radioSell: (i, g, q) => { this.radioSell(i, g, q); },
       getMinimap: () => this.minimapData(),
@@ -3688,7 +3847,26 @@ export class Game {
           i, x: Math.round(s.x), y: Math.round(s.y), target: s.targetIdx,
           callT: Math.round(s.callT * 10) / 10, callIdx: s.callIdx,
           tx: Math.round(s.tx), ty: Math.round(s.ty),
+          // 14d: таможный канал — прогресс досмотра, цель и пауза перед следующим
+          scanT: Math.round(s.scanT * 10) / 10, scanIdx: s.scanIdx,
+          cd: Math.round(s.inspectCd * 10) / 10,
         })),
+      // 14d: живой канал досмотра (все катера, включая конвоиров) + спавн катера
+      // + выдача товара игроку — трюм не деньги, инвариант не трогает
+      scan: () => this.ships
+        .map((s, i) => ({ s, i }))
+        .filter(({ s }) => s.active && s.faction === "patrol" && s.scanIdx >= 0 && s.scanT > 0)
+        .map(({ s, i }) => ({
+          from: i, to: s.scanIdx,
+          t: Math.round(s.scanT * 10) / 10, cd: Math.round(s.inspectCd * 10) / 10,
+        })),
+      patrolSpawn: (x: number, y: number) => this.spawnShip("patrol", x, y),
+      pcargo: (gid: string, tons?: number) => {
+        if (tons === undefined) return Math.round(this.player.cargo[gid] ?? 0);
+        this.player.cargo[gid] = Math.max(0, Math.round(tons));
+        this.pushHud();
+        return this.player.cargo[gid];
+      },
       tmove: (i: number, x: number, y: number) => {
         const s = this.ships[i];
         if (!s || !s.active || s.faction !== "trader") return false;
@@ -3700,6 +3878,11 @@ export class Game {
         const s = this.ships[i];
         return s && s.active ? { x: Math.round(s.x), y: Math.round(s.y), faction: s.faction } : null;
       },
+      // 14d: список окрестностей для зондов — кто живой в радиусе (выбрать место досмотра)
+      near: (x: number, y: number, r: number) => this.ships
+        .map((s, i) => ({ s, i }))
+        .filter(({ s, i }) => i > 0 && s.active && Math.hypot(s.x - x, s.y - y) <= r)
+        .map(({ s, i }) => ({ i, faction: s.faction, smuggler: s.smuggler, x: Math.round(s.x), y: Math.round(s.y) })),
       // телепорт игрока для probe-тестов кадров (12b: съёмка тела крупным планом)
       tp: (x: number, y: number) => {
         const p = this.ships[0];

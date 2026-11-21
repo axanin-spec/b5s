@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { GOODS, REP, VICTORY_SHARE } from '@/game/config'
+import { GOODS, INSPECT, REP, VICTORY_SHARE } from '@/game/config'
 import { gameApi, type Snapshot } from '@/game/uiBridge'
 import { GoodIcon } from './GoodIcon'
 
@@ -159,6 +159,11 @@ export function Hud({ snap, isTouch }: { snap: Snapshot; isTouch: boolean }) {
             Кланы {hud.rep.clan > 0 ? '+' : ''}{Math.round(hud.rep.clan)}
           </span>
         </div>
+        {hud.scan > 0 && (
+          <div className="hud-scan">
+            ⦿ ВАС СКАНИРУЮТ · трюм вскрыют через {Math.max(0, Math.ceil((1 - hud.scan) * INSPECT.TIME))} с · [X] сбросить груз · уходить за радиус
+          </div>
+        )}
         {hud.wanted && (
           <div className="hud-outlaw">
             {hud.outlaw

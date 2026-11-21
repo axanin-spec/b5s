@@ -30,7 +30,9 @@
     "pretraders": "npm run build:test",
     "traders": "node scripts/trader-test.mjs",
     "prepatrol": "npm run build:test",
-    "patrol": "node scripts/patrol-test.mjs"
+    "patrol": "node scripts/patrol-test.mjs",
+    "preinspect": "npm run build:test",
+    "inspect": "node scripts/inspect-test.mjs"
   },
   "dependencies": {
     "react": "^19.2.0",
