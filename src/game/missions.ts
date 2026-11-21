@@ -451,7 +451,14 @@ export function grabStorehouse(c: MissionsCtx, d: Dockable): void {
   total += econ.gain(c, Math.max(RAID.LOOT_MIN.alliance, RAID.LOOT.alliance * Math.max(0, c.pools.alliance)) * pl, "alliance");
   r.grabbed.push(d.id);
   r.taken += total;
-  c.player.earned += total;
+  // 14с: со «своего» капитана кланы берут долю добычи — скупка краденого в их руках.
+  // Первый налёт ещё «с чистых рук»: своим грабитель становится только после него.
+  let clanCut = 0;
+  if (c.isPirate()) {
+    clanCut = Math.min(Math.round(total * RAID.CLAN_SHARE), Math.max(0, Math.round(c.player.credits)));
+    if (clanCut > 0) { c.player.credits -= clanCut; c.pools.clan += clanCut; }
+  }
+  c.player.earned += total - clanCut;
   c.grabTarget = null; c.grabT = 0;
   // the clans applaud every sagging Alliance warehouse (Этап 6)
   c.addRep(PIRATE_BRANCH.REP_RAID_GRAB);
@@ -465,7 +472,8 @@ export function grabStorehouse(c: MissionsCtx, d: Dockable): void {
     c.setNews(`⚔ Склад ${d.name} опустошен: +₡${total.toLocaleString("ru-RU")}. Патруль объявил вас пиратом — с этого момента вас ищут!`);
   } else {
     c.audio.sfx("credits");
-    c.setNews(`⚔ Склад ${d.name} опустошен: +₡${total.toLocaleString("ru-RU")}.`);
+    c.setNews(`⚔ Склад ${d.name} опустошен: +₡${total.toLocaleString("ru-RU")}.`
+      + (clanCut > 0 ? ` Кланам доля: ₡${clanCut.toLocaleString("ru-RU")} — скупка краденого не забудет.` : ""));
   }
   c.floater(d.x, d.y - d.radius - 40, `+₡${Math.round(total).toLocaleString("ru-RU")}`, "#ff9a3c", true);
   c.pushHud();

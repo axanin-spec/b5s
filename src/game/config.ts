@@ -216,6 +216,9 @@ export const RAID = {
   GUARDS_PER_STATION: 2,
   /** Each take sags every market price in the system by this fluct push (embargo bites prices). */
   EMBARGO_PUSH: 0.12,
+  /** 14с: доля добычи, которую кланы берут с «своего» капитана (подпольная скупка
+   *  краденого — их руки в каждом складе). Снимается с выигрыша в фонд кланов. */
+  CLAN_SHARE: 0.1,
 } as const;
 
 /* ------------------------------------------------------------------ */
@@ -246,6 +249,12 @@ export const GOODS: readonly GoodDef[] = [
  * считает его уликой — поэтому CONTRABAND_GOODS шире, чем CLAN_ONLY_GOODS.
  */
 export const CLAN_ONLY_GOODS: readonly string[] = ["tobacco", "spice", "drugs"];
+
+/** Уличный чёрный рынок (Этап 14с): клановая тройка торгуется в ЛЮБОМ доку —
+ *  из-под прилавка, через клановую кассу. Выплата жирнее клановой земли (там 1.12),
+ *  закуп впрок дорогой — уличный сходняк берёт премию за риск: сделку в любой
+ *  момент может прервать патрульный досмотр (задел 14д). Маржа живёт в фонде кланов. */
+export const BLACK_STREET = { buy: 1.12, sell: 1.24 } as const;
 
 /** 14d: что ищет патрульный досмотр (оружие + наркотическая тройка). */
 export const CONTRABAND_GOODS: readonly string[] = ["arms", "tobacco", "spice", "drugs"];
@@ -365,14 +374,20 @@ export const TRADER_GUILD = {
 } as const;
 
 /* ------------------------------------------------------------------ */
-/* Clan haulers (Этап 8): серый трафик «база ⇄ оккупированная система» */
+/* Clan haulers (Этап 8): серый трафик, с 14с — вооружённый по всей   */
+/* галактике: вёзёт контрабанду и сбывает её в любом порту             */
 /* ------------------------------------------------------------------ */
 
 export const SMUGGLER = {
   /** Haulers kept on route while the player is in Terminus or the occupied system. */
   COUNT: 2,
+  /** 14с: бортники работают в любой системе — уличный рынок кормит кланов везде. */
+  STREET_COUNT: 1,
   /** Working capital drawn from the CLAN fund at spawn (returned on despawn). */
   CASH: [5000, 9000] as const,
+  /** 14с: трюм при выходе — сколько тонн клановой тройки грузит бортник (расход из
+   *  клановой кассы по базовой цене дока: товар кланов, деньги остаются у кланов). */
+  LOAD: 10,
   CALLSIGNS: ["Крыса", "Тень", "Мул", "Кобра", "Глухарь"] as const,
 } as const;
 

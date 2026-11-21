@@ -1,13 +1,19 @@
 /**
- * smuggle-test.mjs — автотест клановых бортников (Этап 8): серый трафик
- * «база Терминуса ⇄ оккупированная система». Проверяет:
- *  1. спавн: бортники появляются в Терминусе и в оккупированной системе (и только там);
- *  2. маршруты: цель — лэир (Терминус) или станция чёрного рынка (оккупация), никогда
- *     доки Альянса; после сделки бортник уходит к краю и покидает систему;
- *  3. деньги: сделки идут через клановый пул, инвариант Σпулов+float+игрок держится (delta 0)
- *     на каждом чекпоинте; кошелёк возвращается в клан при уходе;
- *  4. лор-иммунитет: пираты/флагман никогда не берут бортника в прицел;
- *  5. сейв: клан записывается брутто (кошельки бортников влиты), Альянс — без них.
+ * smuggle-test.mjs — автотест клановых бортников (Этап 8, 14с): серый трафик
+ * по всей галактике — в клановых водах гуще, на союзной земле — уличный сходняк.
+ * Проверяет:
+ *  1. спавн (14с): бортники есть в ЛЮБОЙ системе (в союзном Эйдолоне — уличный
+ *     наём), в Терминусе и оккупированной — вдвое гуще; на выходе трюм с тройкой;
+ *  2. маршруты: цель — лэир (Терминус), станция чёрного рынка (оккупация) или
+ *     любой союзный док (14с); после сделки бортник уходит к краю и покидает систему;
+ *  3. деньги: сделки идут через клановый пул (своим и чужим портам — тоже),
+ *     инвариант Σпулов+float+игрок держится (delta 0) на каждом чекпоинте;
+ *     кошелёк возвращается в клан при уходе;
+ *  4. уличный прилавок (14с): игрок в союзном доку покупает/сдаёт контрабанду —
+ *     деньги ходят ИСКЛЮЧИТЕЛЬНО игрок ↔ клановая касса, станция и патруль
+ *     не при чём (тариф 13a чёрный рынок не берёт);
+ *  5. лор-иммунитет: пираты/флагман никогда не берут бортника в прицел;
+ *  6. сейв: клан записывается брутто (кошельки бортников влиты), Альянс — без них.
  *
  * Использование: npm run build && npm run smuggle   (сервит dist/, как balance-test)
  */
@@ -73,13 +79,47 @@ await page.evaluate(() => {
   window.__sim.god();
 });
 
-// ── 0. контроль: в Эйдолоне (свободная, не Терминус) бортников НЕТ ──
-const none = await page.evaluate(() => {
+// ── 0. 14с: в Эйдолоне (союзная, не Терминус) бортники ЕСТЬ — уличный наём ──
+const street = await page.evaluate(() => {
   window.__sim.hide();
-  window.__sim.step(1200); // 20 с — спавн-цикл точно отработал
-  return window.__sim.smugglers().length;
+  window.__sim.step(600); // 10 с — спавн-цикл точно отработал
+  const trio = (s) => (s.cargo.tobacco ?? 0) + (s.cargo.spice ?? 0) + (s.cargo.drugs ?? 0);
+  const sm = window.__sim.smugglers();
+  return {
+    n: sm.length,
+    armed: sm.length > 0 && sm.every((s) => s.dmg > 0), // конвой им нанимать не у кого, но пушка есть
+    loaded: sm.some((s) => trio(s) > 0), // выходят гружёными клановой тройкой
+    stationRoute: sm.every((s) => s.ai === 2 || String(s.routeId ?? "").startsWith("station-")),
+  };
 });
-const okNoFalseSpawn = none === 0;
+const okSpawnStreet = street.n >= 1 && street.armed && street.loaded && street.stationRoute;
+
+// ── 0b. 14с: уличный прилавок — контрабанда в союзном доку ходит игрок ↔ клан ──
+const counter = await page.evaluate(() => {
+  const api = window.__gameApi.current;
+  window.__sim.cash(20000); // до 30 тыс., чтобы не пробить VICTORY_SHARE
+  const dock = window.__sim.sdock(); // первая станция Эйдолона — союзный док
+  if (!dock || !dock.docked) return { found: false };
+  const a0 = window.__econAudit();
+  api.buy("tobacco", 3); // закуп из-под прилавка: игрок → клановая касса
+  const a1 = window.__econAudit();
+  api.sell("tobacco", 3); // и сдача — тоже из-под прилавка: клановая касса → игрок
+  const a2 = window.__econAudit();
+  window.__sim.sundock();
+  return {
+    found: true,
+    clanSpend: a1.pools.clan - a0.pools.clan, // закуп: клановая касса пополнела
+    clanPayout: a1.pools.clan - a2.pools.clan, // выплата: клановая касса опустела
+    stationsDrift: (a1.pools.stations - a0.pools.stations) + (a2.pools.stations - a1.pools.stations),
+    patrolDrift: (a1.pools.patrol - a0.pools.patrol) + (a2.pools.patrol - a1.pools.patrol), // тарифа нет
+    creditsNet: a2.player - a0.player, // круг с руками: продали дешевле, чем купили
+    delta: a2.delta,
+  };
+});
+const okStreetTrade = counter.found
+  && counter.clanSpend > 0 && counter.clanPayout > 0
+  && counter.stationsDrift === 0 && counter.patrolDrift === 0
+  && counter.creditsNet < 0 && Math.abs(counter.delta) < 1;
 
 // ── 1. Терминус: спавн, маршрут на лэир, сделки через клан, уход ──
 const term = await page.evaluate(() => {
@@ -150,11 +190,13 @@ const okRouteBlackMarket = occSmugs.length > 0
 const okDeltaOcc = occ.deltas.every((d) => Math.abs(d) < 0.01);
 
 await done({
-  okNoFalseSpawn, okSpawnTerminus, okRouteLair, okNoPirateTarget,
+  okSpawnStreet, okStreetTrade,
+  okSpawnTerminus, okRouteLair, okNoPirateTarget,
   okClanTrade, okLeave, okDelta, okSaveGross,
   okSpawnOccupied, okRouteBlackMarket, okDeltaOcc,
   noPageErrors: pageErrors.length === 0,
 }, {
+  street, counter,
   terminus: { clanStart: term.clanStart, clanEnd: term.clanEnd, samples: term.samples.filter((s) => s.length).slice(0, 3) },
   save: { smugglerFloat: saveCheck.smug, auditClan: saveCheck.a.pools.clan, saveClan: saveCheck.sv?.pools.clan },
   occupied: occ.samples.filter((s) => s.length).slice(0, 2),

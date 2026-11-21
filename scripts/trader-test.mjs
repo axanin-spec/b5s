@@ -2,8 +2,8 @@
  * trader-test.mjs — автотест боевых торговцев (Этап 14а): оборонительный огонь,
  * личные классы по счёту рейсов, наёмный конвой класса «A», реестр в сейве.
  * Проверяет:
- *  1. вооружение: каждый гражданский караван стоит с плазмой (dmg/fireRate > 0),
- *     клановые бортники — безоружны (до 14с);
+ *  1. вооружение: каждый гражданский караван стоит с плазмой (dmg/fireRate > 0);
+ *     с 14с и клановые бортники вооружены (класс «C») и выходят с контрабандой в трюме;
  *  2. гнев: попадание пирата выставляет anger на стрелка; караван отвечает болтами,
  *     попадание игрока гнева не заводит (оборона — только по рейдерам);
  *  3. классы: зачтённые рейсы растят книгу C→B→A, корпус/пушки растут на ходу;
@@ -173,13 +173,19 @@ const round = await page.evaluate(() => {
   return { found: true, ok, empty, tier: back ? back.tier : -1, trips: back ? back.trips : -1 };
 });
 
-// ── 6. клановые бортники безоружны + деньги целы ──
+// ── 6. клановые бортники вооружены (14с), с контрабандой на борту; деньги целы ──
 const tail = await page.evaluate(() => {
   window.__sim.jump("terminus");
   window.__sim.step(900); // бортники успели сойтись
   const sm = window.__sim.smugglers();
+  const trio = (s) => (s.cargo.tobacco ?? 0) + (s.cargo.spice ?? 0) + (s.cargo.drugs ?? 0);
   const audit = window.__sim.step(1);
-  return { n: sm.length, unarmed: sm.every((s) => s.dmg === 0 && s.fireRate === 0), delta: audit.delta };
+  return {
+    n: sm.length,
+    armed: sm.every((s) => s.dmg > 0 && s.fireRate > 0), // 14с: пушка класса «C» у каждого
+    loaded: sm.some((s) => trio(s) > 0), // хотя бы один вышел с тоннами тройки
+    delta: audit.delta,
+  };
 });
 
 const ok = {
@@ -192,7 +198,7 @@ const ok = {
   okEscort: escort.found && escort.hired && escort.walletDrop === 2500 && escort.patrolGain === 2500 && Math.abs(escort.delta) < 1,
   okFight: fight.found && (fight.locked || (fight.pirateHp >= 0 && fight.pirateHp < 55)),
   okReg: round.found && round.ok && round.empty === 0 && round.tier === 2 && round.trips >= 10,
-  okSmugglersUnarmed: tail.n > 0 && tail.unarmed,
+  okSmugglersArmed: tail.n > 0 && tail.armed && tail.loaded, // 14с
   // аудит денег: balance-test тоже терпит плавающий ноль (копейки на флуктуациях)
   okMoney: Math.abs(tail.delta) < 1,
 };

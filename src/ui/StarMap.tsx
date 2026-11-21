@@ -325,12 +325,13 @@ export function StarMap({ map }: { map: MapSnapshot }) {
                         </td>
                         {GOODS.map((g) => {
                           const q = it.prices[g.id]
-                          // 14g: тройка в союзном доку не торгуется; старые снимки
-                          // (clan не записан) показываем как раньше — докинг обновит
-                          const ban = it.clan === false && CLAN_ONLY_GOODS.includes(g.id)
+                          // 14с: тройка теперь в товаре любого порта — сходняк из-под
+                          // прилавка; в снимке цен она уже с уличной наценкой
+                          const black = CLAN_ONLY_GOODS.includes(g.id)
+                          const hint = black ? 'контрабанда: из-под прилавка' : undefined
                           return (
-                            <td key={g.id} className={`sm-mk-cell${ban ? ' mk-ban' : ''}`}>
-                              {ban ? <span title="запрещено Альянсом">⊘</span> : q ? <><span className="b">{q.buy}</span><span className="s">{q.sell}</span></> : '—'}
+                            <td key={g.id} className="sm-mk-cell">
+                              {q ? <><span className="b" title={hint}>{q.buy}</span><span className="s" title={hint}>{q.sell}</span></> : '—'}
                             </td>
                           )
                         })}

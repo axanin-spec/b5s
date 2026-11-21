@@ -78,27 +78,26 @@ export function StationScreen({ s }: { s: StationSnapshot }) {
                 const p = s.prices[g.id]
                 const have = s.cargo[g.id] ?? 0
                 const hot = s.eventGood === g.id
-                // 14g: клановая тройка торгуется только на чёрном рынке
+                // 14с: клановая тройка торгуется в любом порту — на союзной земле
+                // из-под прилавка (уличный сходняк), на клановой — открыто
                 const clanGood = CLAN_ONLY_GOODS.includes(g.id)
-                const banned = clanGood && !s.clanMarket
                 return (
-                  <div className={`trade-row ${hot ? 'hot' : ''} ${banned ? 'banned' : ''}`} key={g.id}>
+                  <div className={`trade-row ${hot ? 'hot' : ''}`} key={g.id}>
                     <span className="trade-good">
                       <GoodIcon id={g.id} /><b className="trade-name">{g.name}</b>
                       {hot && <em className="hot-badge">СПРОС ↑</em>}
-                      {banned && <em className="ban-badge">ЗАПРЕТ АЛЬЯНСА</em>}
-                      {clanGood && s.clanMarket && <em className="black-badge">ЧЁРНЫЙ РЫНОК</em>}
+                      {clanGood && <em className="black-badge">{s.clanMarket ? 'ЧЁРНЫЙ РЫНОК' : 'СХОДНЯК · ИЗ-ПОД ПРИЛАВКА'}</em>}
                     </span>
                     <span className="trade-price">
-                      {banned ? <i className="banned-mark">⊘ не торгуется</i> : <><b>{fmt(p.buy)}</b><i> / {fmt(p.sell)}</i></>}
+                      <b>{fmt(p.buy)}</b><i> / {fmt(p.sell)}</i>
                     </span>
                     <span className="trade-have">{have}</span>
                     <span className="trade-actions">
-                      <button className="mini-btn" disabled={banned} onClick={() => api()?.buy(g.id, 1)}>+1</button>
-                      <button className="mini-btn" disabled={banned} onClick={() => api()?.buy(g.id, 10)}>+10</button>
-                      <button className="mini-btn" disabled={banned} title="Набить трюм этим товаром" onClick={() => api()?.buy(g.id, 9999)}>Макс</button>
-                      <button className="mini-btn sell" disabled={have < 1 || banned} onClick={() => api()?.sell(g.id, 1)}>−1</button>
-                      <button className="mini-btn sell" disabled={have < 1 || banned} onClick={() => api()?.sell(g.id, 9999)}>Всё</button>
+                      <button className="mini-btn" onClick={() => api()?.buy(g.id, 1)}>+1</button>
+                      <button className="mini-btn" onClick={() => api()?.buy(g.id, 10)}>+10</button>
+                      <button className="mini-btn" title="Набить трюм этим товаром" onClick={() => api()?.buy(g.id, 9999)}>Макс</button>
+                      <button className="mini-btn sell" disabled={have < 1} onClick={() => api()?.sell(g.id, 1)}>−1</button>
+                      <button className="mini-btn sell" disabled={have < 1} onClick={() => api()?.sell(g.id, 9999)}>Всё</button>
                     </span>
                   </div>
                 )
@@ -114,7 +113,8 @@ export function StationScreen({ s }: { s: StationSnapshot }) {
               </div>
               <div className="trade-note">
                 Цена покупки / цена продажи. Цены живут своей жизнью — следите за новостями.
-                Табак, специя и наркотики — контрабанда: союзные доки ею не торгуют, чёрный рынок — свободно.
+                Табак, специя и наркотики — контрабанда: в союзных портах её берут из-под прилавка —
+                выплата жирнее клановой, но сделку может прервать патрульный досмотр.
                 {s.priceNote && <span className={`price-note ${s.reputation.trader >= REP.FRIENDLY ? 'good' : 'bad'}`}> {s.priceNote}.</span>}
               </div>
             </div>

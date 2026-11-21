@@ -5,7 +5,7 @@
  * через контекст, чтобы модуль оставался тестируемым без canvas.
  */
 
-import { CLAN_ONLY_GOODS, ECONOMY, GOODS, MONEY_TOTAL, OCCUPATION, PIRATE_BRANCH, REP, TRADER_AI } from "./config";
+import { BLACK_STREET, CLAN_ONLY_GOODS, ECONOMY, GOODS, MONEY_TOTAL, OCCUPATION, PIRATE_BRANCH, REP, TRADER_AI } from "./config";
 import type { Dockable, MoneyPools, PlayerState, PoolId, Ship } from "./types";
 import type { RadioSnapshot } from "./uiBridge";
 import { priceOf } from "./world";
@@ -50,19 +50,20 @@ export function clanTurf(c: EconCtx, d: Dockable | null): boolean {
   return !!d && (c.hereOccupied() || d.id === PIRATE_BRANCH.LAIR.id);
 }
 
-/** Товар из клановой тройки (14g): в союзных доках не торгуется вообще. */
+/** Товар из клановой тройки (14g): на союзной бирже не значится, но с 14с
+ *  уходит из-под прилавка в любом порту — по уличным ценам и через клановую кассу. */
 export function isClanOnlyGood(goodId: string): boolean {
   return CLAN_ONLY_GOODS.includes(goodId);
 }
 
-/** Гейдж 14g: контрабанда в союзном доку — сделку не проводить. */
-export function clanOnlyBlocked(c: EconCtx, d: Dockable | null, goodId: string): boolean {
-  return isClanOnlyGood(goodId) && !clanTurf(c, d);
-}
-
-/** Treasury a docked trade runs through: smuggler cash on clan turf, civilian capital elsewhere. */
-export function tradePool(c: EconCtx): PoolId {
-  return clanTurf(c, c.dockTarget) ? "clan" : "stations";
+/**
+ * Касса сделок: на клановой земле — клановый фонд; в союзном доку обычным
+ * товарам — станционная касса, а клановой тройке (14с) — тоже клановая:
+ * уличный сходняк крутит свою наличность, Альянс делает вид, что не видит.
+ */
+export function tradePool(c: EconCtx, goodId?: string): PoolId {
+  if (clanTurf(c, c.dockTarget)) return "clan";
+  return goodId && isClanOnlyGood(goodId) ? "clan" : "stations";
 }
 
 /** Player's share of the galaxy's fixed credit mass (0..1) — the economic victory meter. */
@@ -130,14 +131,19 @@ export function tradeMod(c: EconCtx): { buy: number; sell: number } {
  * Live trade multipliers: reputation bracket + black-market skew when the clans
  * hold the system. Single source of truth — the terminal and the till must agree.
  * On clan turf the clan standing bends the skew too (Этап 6).
+ * 14с: в союзном доку уличный перекос получает только клановая тройка —
+ * остальная биржа живёт по reputation-расценкам Альянса.
  */
-export function priceMods(c: EconCtx): { buy: number; sell: number } {
+export function priceMods(c: EconCtx, goodId?: string): { buy: number; sell: number } {
   const tm = tradeMod(c);
   if (clanTurf(c, c.dockTarget)) {
     const b = c.player.rep.clan >= REP.FRIENDLY ? PIRATE_BRANCH.BLACK_FRIEND
       : c.player.rep.clan <= REP.UNFRIENDLY ? PIRATE_BRANCH.BLACK_COLD
       : OCCUPATION.BLACK;
     return { buy: tm.buy * b.buy, sell: tm.sell * b.sell };
+  }
+  if (goodId && isClanOnlyGood(goodId)) {
+    return { buy: tm.buy * BLACK_STREET.buy, sell: tm.sell * BLACK_STREET.sell };
   }
   return tm;
 }
@@ -176,8 +182,8 @@ export function radioData(c: RadioCtx): RadioSnapshot | null {
   const buys: RadioSnapshot["buys"] = [];
   const room = TRADER_AI.HOLD - traderLoad(s);
   for (const g of GOODS) {
-    // 14g: зарегистрированный караван «неучтёнку» на борт не берёт —
-    // контрабанда ходит только через клановые причалы
+    // 14g/14с: зарегистрированный караван «неучтёнку» на борт не берёт —
+    // уличный сходняк живёт вне караванного эфира
     if (isClanOnlyGood(g.id)) continue;
     const base = priceOf(home, g.id);
     const q = Math.round(s.cargo[g.id] ?? 0);

@@ -6,7 +6,7 @@
  */
 
 import {
-  BOLT_CFG, CONTRACTS, CONVOY, ECONOMY, EMERGENCY_PULSE, EQUIP, EQUIP_LINES, EQUIP_SELL, FACTION_CFG, GATE_CFG, GOODS, HULLS, HULL_SELL, MODULE_LOOT, OCCUPATION, PATROL_ECON, PIRATE_BRANCH, PIRATE_ECON, PLAYER_CFG, POPULATION, QUALITY, RANKS, RAID,
+  BOLT_CFG, BLACK_STREET, CLAN_ONLY_GOODS, CONTRACTS, CONVOY, ECONOMY, EMERGENCY_PULSE, EQUIP, EQUIP_LINES, EQUIP_SELL, FACTION_CFG, GATE_CFG, GOODS, HULLS, HULL_SELL, MODULE_LOOT, OCCUPATION, PATROL_ECON, PIRATE_BRANCH, PIRATE_ECON, PLAYER_CFG, POPULATION, QUALITY, RANKS, RAID,
   MONEY_TOTAL, POOLS, REPAIR_COST_PER_HP, REP, SAVE_VERSION, AUTOSAVE_INTERVAL, SMUGGLER, STARTER_KIT, SYSTEMS, TRADER_AI, TRADER_GUILD, TRADER_TIERS,
   VICTORY_SHARE, WORLD_CFG,
 } from "./config";
@@ -29,7 +29,7 @@ import {
 } from "./textures";
 import type { SystemDef } from "./config";
 import { loadImage, loadPlanetTexture, loadStationTexture, planetVariant } from "./assets";
-import { economyTick, findDockTarget, generateWorld, goodName, kindName, priceOf, refreshAllPrices, updateOrbits } from "./world";
+import { basePriceOf, economyTick, findDockTarget, generateWorld, kindName, priceOf, refreshAllPrices, updateOrbits } from "./world";
 import { loadSave, writeSave, importSaveJson } from "./save";
 import { gameApi, uiBridge, type EndStats, type GameApi, type HudData, type MapSnapshot, type RadioSnapshot, type StationSnapshot } from "./uiBridge";
 import type { ActiveContract, Bolt, ContractOffer, Dockable, Faction, InstalledGear, MarketIntelEntry, MoneyPools, OccupationState, Pickup, PlayerState, PoolId, RaidOp, SaveGame, Ship } from "./types";
@@ -533,7 +533,8 @@ export class Game {
   /* Spawning                                                            */
   /* ================================================================== */
 
-  /** armedTrader=false — клановый бортник (spawnSmuggler): без реестра, класса и пушек до 14с. */
+  /** armedTrader=false — клановый бортник (spawnSmuggler): без реестра и класса;
+   *  с 14с пушки он получает в spawnSmuggler (класс «C», без надбавок реестра). */
   spawnShip(faction: Faction, x: number, y: number, armedTrader = true): number {
     for (let i = 1; i < MAX_SHIPS; i++) {
       const s = this.ships[i];
@@ -689,17 +690,21 @@ export class Game {
     const s = this.ships[idx];
     const here = this.dockables[s.routeTo];
     if (!here) return;
-    // lair dockings (legacy routes) also settle with the clan till, like player trades do
-    const pool: PoolId = this.hereOccupied() || here.id === PIRATE_BRANCH.LAIR.id ? "clan" : "stations";
+    // lair dockings (legacy routes) also settle with the clan till, like player trades do;
+    // 14с: бортник — торговый агент кланов, его прилавок в любом порту — клановая касса
+    const clanHere = this.hereOccupied() || here.id === PIRATE_BRANCH.LAIR.id;
+    const pool: PoolId = s.smuggler ? "clan" : clanHere ? "clan" : "stations";
 
     // 1) sell everything the market can still pay for
     for (const g of GOODS) {
       const q = Math.round(s.cargo[g.id] ?? 0);
       if (q <= 0) continue;
-      // 14g: на союзной таможне «неучтёнка» не проходит — везём дальше (страховка
-      // от Legacy-груза: караваны контрабанду изначально не набирают)
+      // 14g: гражданский караван «неучтёнку» не везёт — страховка от Legacy-груза
       if (pool === "stations" && econ.isClanOnlyGood(g.id)) continue;
-      const unit = Math.max(1, Math.round(priceOf(here, g.id) * ECONOMY.SELL_FACTOR));
+      // 14с: тройка, сошедшая с рук в союзном порту, идёт по уличной выплате —
+      // платит клановая касса, побор за риск остаётся между своими
+      const street = !clanHere && econ.isClanOnlyGood(g.id);
+      const unit = Math.max(1, Math.round(priceOf(here, g.id) * ECONOMY.SELL_FACTOR * (street ? BLACK_STREET.sell : 1)));
       const affordable = Math.floor(Math.max(0, Math.round(this.pools[pool])) / unit);
       const sold = Math.min(q, affordable);
       if (sold <= 0) continue; // empty till — carry the cargo around the block
@@ -849,8 +854,9 @@ export class Game {
   /* Clan haulers (Этап 8): grey traffic lair ⇄ occupied system          */
   /* ================================================================== */
 
-  /** True while the smuggling route has an endpoint in the player's system:
-   *  the lair in Terminus, or any black-market dock of the occupied system. */
+  /** True in clan waters — the lair in Terminus or the occupied system:
+   *  the heartland of the route. С 14с бортники ходят и прочь отсюда, но
+   *  именно тут их караванная смена несётся вдвое гуще (SMUGGLER.COUNT). */
   private smuggleHere(): boolean {
     return this.systemDef.id === PIRATE_BRANCH.LAIR_SYSTEM || this.hereOccupied();
   }
@@ -866,7 +872,7 @@ export class Game {
     const r = HALF * (0.75 + this.rnd() * 0.35);
     const x = Math.cos(a) * r, y = Math.sin(a) * r;
     if (Math.hypot(x - p.x, y - p.y) <= 3800) return; // don't surface a hauler on the player's nose
-    const idx = this.spawnShip("trader", x, y, false); // 14а: бортник без реестра и пушек
+    const idx = this.spawnShip("trader", x, y, false); // 14с: без реестра и класса — но с пушкой ниже
     if (idx < 0) return;
     const s = this.ships[idx];
     this.pools.alliance += s.wallet;
@@ -877,6 +883,23 @@ export class Game {
     this.pools.clan -= s.wallet;
     s.smuggler = true;
     s.name = SMUGGLER.CALLSIGNS[Math.floor(this.rnd() * SMUGGLER.CALLSIGNS.length)];
+    // 14с: бортник вооружён как караван класса «C» — конвоя ему нанимать не у кого
+    // (реестра нет), зато он отвечает рейдеру, севшему на хвост вдали от клановых вод
+    const cGun = TRADER_TIERS.TIERS[0];
+    s.dmg = cGun.dmg; s.fireRate = cGun.fireRate;
+    // 14с: выходит гружёным — тонны клановой тройки с базы; расплату берёт из своего
+    // фонда по базовой цене дока, деньги остаются внутри кланового контура
+    const ref = this.dockables.find((dd) => dd.isStation) ?? this.dockables[0];
+    if (ref) {
+      const gid = CLAN_ONLY_GOODS[Math.floor(this.rnd() * CLAN_ONLY_GOODS.length)];
+      const unit = Math.max(1, Math.round(basePriceOf(ref, gid)));
+      const q = Math.min(SMUGGLER.LOAD, Math.floor(s.wallet / unit));
+      if (q > 0) {
+        s.wallet -= q * unit;
+        this.pools.clan += q * unit;
+        s.cargo[gid] = (s.cargo[gid] ?? 0) + q;
+      }
+    }
     this.pickSmugglerRoute(idx);
   }
 
@@ -991,15 +1014,16 @@ export class Game {
     if (!s.active) return;
     if (idx === 0 && this.jumpGrace > 0) return; // post-jump invulnerability
     s.sinceHit = 0;
-    // 14а: гражданский караван помнит обидчика — только рейдеров (пират/флагман),
-    // оборонительный огонь по ним; игрок и патруль под его плазмой не значатся
-    if (s.faction === "trader" && !s.smuggler && byIdx >= 0 && byIdx !== idx && this.sm.state === "playing") {
+    // 14а/14с: караван и бортник помнят обидчика — только рейдеров (пират/флагман),
+    // оборонительный огонь по ним; игрок и патруль под их плазмой не значатся
+    if (s.faction === "trader" && byIdx >= 0 && byIdx !== idx && this.sm.state === "playing") {
       const a = this.ships[byIdx];
       if (a && a.active && (a.faction === "pirate" || a.faction === "boss")) {
         s.angerIdx = byIdx;
         s.angerT = TRADER_TIERS.ANGER_T;
-        // 14b: сигнал бедствия — ближайший казённый катер спешит на помощь
-        if (s.callCd <= 0) {
+        // 14b: сигнал бедствия — ближайший казённый катер спешит на помощь;
+        // 14с: бортник кланов патруль звать не станет — сам за себя
+        if (!s.smuggler && s.callCd <= 0) {
           s.callCd = TRADER_GUILD.CALL_CD;
           this.summonPatrol(idx);
         }
@@ -1567,8 +1591,9 @@ export class Game {
   /** Spend player credits into a treasury — the mirror of gain(). */
   private pay(n: number, pool: PoolId): void { econ.pay(this, n, pool); }
 
-  /** Treasury a docked trade runs through: smuggler cash on clan turf, civilian capital elsewhere. */
-  private tradePool(): PoolId { return econ.tradePool(this); }
+  /** Treasury a docked trade runs through: клановая касса на своей земле и на
+   *  уличном сходняке контрабанды (14с), гражданская — остальному товару. */
+  private tradePool(goodId?: string): PoolId { return econ.tradePool(this, goodId); }
 
   /** Player's share of the galaxy's fixed credit mass (0..1) — the economic victory meter. */
   sharePct(): number { return econ.sharePct(this); }
@@ -1696,27 +1721,18 @@ export class Game {
    * On clan turf the clan standing bends the skew too (Этап 6): «свои» buy at 0.82
    * and sell at 1.2; cold standing flattens the black-market bonus to a rounding.
    */
-  private priceMods(): { buy: number; sell: number } {
-    return econ.priceMods(this);
-  }
-
-  /** 14g: союзный причал не торгует клановой тройкой — ни покупка, ни продажа. */
-  private banRefuse(d: Dockable, goodId: string): boolean {
-    if (!econ.clanOnlyBlocked(this, d, goodId)) return false;
-    this.audio.sfx("alarm");
-    this.setNews(`Таможня Альянса: «${goodName(goodId)}» в союзном доке под запретом — это товар чёрного рынка.`);
-    return true;
+  private priceMods(goodId?: string): { buy: number; sell: number } {
+    return econ.priceMods(this, goodId);
   }
 
   buy(goodId: string, qty: number): void {
     const d = this.dockTarget;
     if (!d || this.sm.state !== "docked") return;
-    if (this.banRefuse(d, goodId)) return;
-    const price = Math.max(1, Math.round(priceOf(d, goodId) * this.priceMods().buy));
+    const price = Math.max(1, Math.round(priceOf(d, goodId) * this.priceMods(goodId).buy));
     const space = this.cargoMax() - this.cargoUsed();
     const n = Math.min(qty, space, Math.floor(this.player.credits / price));
     if (n <= 0) return;
-    const pool = this.tradePool();
+    const pool = this.tradePool(goodId); // 14с: тройка в союзном доку идёт через клановый прилавок
     this.pay(n * price, pool);
     econ.levy(this, n * price, pool); // 13a: патрульный тариф с оборота
     this.player.cargo[goodId] = (this.player.cargo[goodId] ?? 0) + n;
@@ -1731,14 +1747,14 @@ export class Game {
   sell(goodId: string, qty: number): void {
     const d = this.dockTarget;
     if (!d || this.sm.state !== "docked") return;
-    if (this.banRefuse(d, goodId)) return;
     const have = this.player.cargo[goodId] ?? 0;
     let n = Math.min(qty, have);
     if (n <= 0) return;
-    const unit = Math.max(1, Math.round(priceOf(d, goodId) * ECONOMY.SELL_FACTOR * this.priceMods().sell));
-    // the counter pays with real money only: smuggler cash below occupied stations,
-    // civilian capital elsewhere — an empty till buys nothing (5a, closed circulation)
-    const pool = this.tradePool();
+    const unit = Math.max(1, Math.round(priceOf(d, goodId) * ECONOMY.SELL_FACTOR * this.priceMods(goodId).sell));
+    // the counter pays with real money only: smuggler cash below occupied stations
+    // and on the street market (14с), civilian capital elsewhere —
+    // an empty till buys nothing (5a, closed circulation)
+    const pool = this.tradePool(goodId);
     n = Math.min(n, Math.floor(this.pools[pool] / unit));
     if (n <= 0) {
       this.audio.sfx("alarm");
@@ -1763,17 +1779,11 @@ export class Game {
   sellAll(): void {
     const d = this.dockTarget;
     if (!d || this.sm.state !== "docked") return;
-    // 14g: контрабанда в союзном доке не продаётся — молча остаётся в трюме,
-    // одна сводная строка вместо трёх отказов
-    let banned = 0;
+    // 14с: трюм уходит весь до последней тонны — и провиант в кассу станции,
+    // и тройка с руки в клановую (чёрный рынок теперь в любом порту)
     for (const g of GOODS) {
       if ((this.player.cargo[g.id] ?? 0) <= 0) continue;
-      if (econ.clanOnlyBlocked(this, d, g.id)) { banned++; continue; }
       this.sell(g.id, 9999);
-    }
-    if (banned > 0) {
-      this.audio.sfx("alarm");
-      this.setNews(`Таможня: ${banned === 1 ? "один запретный сорт" : `${banned} запретных сорта`} в трюме союзный док не берёт — держите для чёрного рынка.`);
     }
   }
 
@@ -2481,11 +2491,13 @@ export class Game {
     if (!this.hereOccupied() && this.pools.patrol >= PATROL_ECON.TREASURY_FULL
       && !this.ships.some((s) => s.active && s.cruiser)) this.spawnCruiser();
     if (traders < POPULATION.TRADERS) this.spawnAtEdge("trader");
-    // clan haulers (Этап 8): the grey route breathes only around its endpoints
-    if (this.smuggleHere()) {
+    // clan haulers (Этап 8, 14с): уличный чёрный рынок открыт в каждом порту —
+    // сходняк кормит кланов везде, а на клановой воде караванов вдвое гуще
+    {
+      const want = this.smuggleHere() ? SMUGGLER.COUNT : SMUGGLER.STREET_COUNT;
       let smugglers = 0;
       for (const s of this.ships) if (s.active && s.smuggler) smugglers++;
-      if (smugglers < SMUGGLER.COUNT) this.spawnSmuggler();
+      if (smugglers < want) this.spawnSmuggler();
     }
   }
 
@@ -2622,21 +2634,22 @@ export class Game {
     const HALF = WORLD_CFG.HALF;
 
     if (s.faction === "trader") {
-      // 14а: оборонительный огонь — караван помнит обидчика ANGER_T секунд и отвечает по нему,
-      // не сворачивая с маршрута: выстрел берёт общий блок NPC-огня по targetIdx.
+      // 14а/14с: оборонительный огонь — и караван, и бортник помнят обидчика ANGER_T
+      // секунд и отвечают по нему, не сворачивая с маршрута: выстрел берёт общий
+      // блок NPC-огня по targetIdx.
+      if (s.angerT > 0) {
+        s.angerT -= dt;
+        const a = s.angerIdx >= 0 ? this.ships[s.angerIdx] : null;
+        if (s.angerT <= 0 || !a || !a.active) { s.angerIdx = -1; s.angerT = 0; s.targetIdx = -1; }
+        else if (Math.hypot(a.x - s.x, a.y - s.y) <= TRADER_TIERS.RANGE) s.targetIdx = s.angerIdx;
+        else s.targetIdx = -1; // выпустил из прицела — ждём, пока вернётся в радиус памяти
+      } else {
+        s.angerIdx = -1;
+        s.targetIdx = -1;
+      }
+      // 14b: разведка — только гражданский караван работает глазами патруля;
+      // бортник кланов патрулю не докладывает и сигнала бедствия не шлёт
       if (!s.smuggler) {
-        if (s.angerT > 0) {
-          s.angerT -= dt;
-          const a = s.angerIdx >= 0 ? this.ships[s.angerIdx] : null;
-          if (s.angerT <= 0 || !a || !a.active) { s.angerIdx = -1; s.angerT = 0; s.targetIdx = -1; }
-          else if (Math.hypot(a.x - s.x, a.y - s.y) <= TRADER_TIERS.RANGE) s.targetIdx = s.angerIdx;
-          else s.targetIdx = -1; // выпустил из прицела — ждём, пока вернётся в радиус памяти
-        } else {
-          s.angerIdx = -1;
-          s.targetIdx = -1;
-        }
-        // 14b: разведка — что видит мостик каравана, знает весь патруль:
-        // замеченный рейдер получает меток-наводку, патруль снимает её с ордера по истечении
         if (s.callCd > 0) s.callCd -= dt;
         for (let j = 1; j < MAX_SHIPS; j++) {
           const o = this.ships[j];
@@ -3173,10 +3186,11 @@ export class Game {
    * Shared by the terminal screen and the intel log (Этап 10a) — both must agree.
    */
   private stationPrices(d: Dockable): StationSnapshot["prices"] {
-    // black market skews both directions: smugglers' goods cheap, stolen cargo paid fat
-    const mod = this.priceMods();
+    // black market skews both directions: smugglers' goods cheap, stolen cargo paid fat;
+    // 14с: в союзном доку перекос достается только клановой тройке — уличный сходняк
     const prices: StationSnapshot["prices"] = {};
     for (const g of GOODS) {
+      const mod = this.priceMods(g.id);
       const base = priceOf(d, g.id);
       prices[g.id] = {
         buy: Math.max(1, Math.round(base * mod.buy)),
@@ -3606,11 +3620,25 @@ export class Game {
           i, ai: s.ai, name: s.name,
           routeId: this.dockables[s.routeTo]?.id ?? null,
           wallet: Math.round(s.wallet), hp: s.hp, maxHp: s.maxHp,
-          dmg: s.dmg, fireRate: s.fireRate, // 14а: бортник безоружен до 14с — проверяет trader-test
+          dmg: s.dmg, fireRate: s.fireRate, // 14с: вооружён классом «C» — проверяет trader-test
+          cargo: { ...s.cargo }, // 14с: на выход — тонны клановой тройки
           x: Math.round(s.x), y: Math.round(s.y),
           targetedByPirate: this.ships.some((o, j) => j > 0 && o.active
             && (o.faction === "pirate" || o.faction === "boss") && o.targetIdx === i),
         })),
+      // 14с: «швартовка» зонда у дока без перелёта — для проверки уличного рынка; null, если не вышло
+      sdock: (id?: string) => {
+        const d = id ? this.dockables.find((dd) => dd.id === id) : this.dockables.find((dd) => dd.isStation);
+        if (!d || this.sm.state !== "playing") return null;
+        const p = this.ships[0];
+        p.x = d.x + d.radius + WORLD_CFG.DOCK_MARGIN * 0.5; p.y = d.y;
+        p.vx = 0; p.vy = 0;
+        this.dockTarget = d;
+        this.dock();
+        const st: string = this.sm.state; // dock() мог увести машину состояний в «docked»
+        return { id: d.id, docked: st === "docked" };
+      },
+      sundock: () => { if (this.sm.state === "docked") this.undock(); return this.sm.state; },
       // боевые торговцы (Этап 14а): живые караваны + реестр + шипы для probes
       traders: () => this.ships
         .map((s, i) => ({ s, i }))

@@ -5,8 +5,9 @@
  *  2. вторая станция добавляется в журнал, повторная стыковка обновляет время снимка;
  *  3. сейв v9 несёт разведку в localStorage (докинг автосохраняет);
  *  4. на карте вкладка «Система» → «Рынки»: посещённые со ценами, прочие «нет данных»;
- *  5. 14g: контрабанда (табак/специя/наркотики) — в союзном доку запрет (кнопки,
- *     бейдж, buy молчит), в Логово покупается; сейв несёт clan-флаги снимков;
+ *  5. 14с: контрабанда (табак/специя/наркотики) торгуется везде — в союзном доку
+ *     покупка проходит из-под прилавка (бейдж «сходняк», деньги в клановую кассу,
+ *     станция и патруль не при чём), в Логово — открыто; сейв несёт clan-флаги;
  *  6. сейв v8 без intel загружается и даёт пустую разведку (обратная совместимость).
  *
  * Использование: npm run intel   (pre-хук сам соберёт build:test)
@@ -120,23 +121,39 @@ const okUi = collapsed
   && table.includes(names[0]) && table.includes("нет данных")
   && !table.includes("устарело"); // снимки свежие — глушения быть не должно
 
-// ── 5. 14g: контрабанда под запретом в союзном доке, свободна в Логово ──
-// Союзная станция (Эйдолон): buy специй/табака/наркотиков не проходит, в терминале бейдж.
-const allianceBan = await page.evaluate((id) => {
+// ── 5. 14с: чёрный рынок везде — в союзном доку контрабанда идёт из-под прилавка ──
+// Союзная станция (Эйдолон): специя/табак/наркотики покупаются — молчаливого отказа
+// 14g больше нет; в терминале бейдж «сходняк»; кредиты уходят в клановую кассу —
+// станция получает только обычную торговлю, патруль не берёт тариф с уличной сделки.
+const allianceStreet = await page.evaluate((id) => {
   window.__gameApi.current.closeMap();
+  window.__sim.cash(20000); // на десяток специи с уличной наценкой
   window.__sim.dockAt(id);
   const s = window.__uiBridge.getSnapshot().station;
   const before = { ...s.cargo };
-  // покупка на свои — контрабанда не проходит, провиант проходит
+  const a0 = window.__econAudit();
+  // покупка на свои: сходняк проворачивается, провиант — как всегда, по счёту станции
   window.__gameApi.current.buy("spice", 10);
+  const a1 = window.__econAudit();
   window.__gameApi.current.buy("food", 5);
+  const a2 = window.__econAudit();
   const after = window.__uiBridge.getSnapshot().station.cargo;
-  return { clanMarket: s.clanMarket, spice: (after.spice ?? 0) - (before.spice ?? 0), food: (after.food ?? 0) - (before.food ?? 0) };
+  return {
+    clanMarket: s.clanMarket,
+    spice: (after.spice ?? 0) - (before.spice ?? 0),
+    food: (after.food ?? 0) - (before.food ?? 0),
+    clanSpend: a1.pools.clan - a0.pools.clan, // специя: кредиты ушли кланам
+    clanFood: a2.pools.clan - a1.pools.clan, // провиант — кланам ни кредита
+    stationsSpend: a2.pools.stations - a0.pools.stations, // а еда — счёт станции
+    delta: a2.delta,
+  };
 }, st0);
-const banTable = await page.locator(".trade-table").innerText().catch(() => "");
-const okAllianceBan = allianceBan.clanMarket === false
-  && allianceBan.spice === 0 && allianceBan.food === 5
-  && banTable.includes("ЗАПРЕТ") && banTable.includes("не торгуется");
+const streetTable = await page.locator(".trade-table").innerText().catch(() => "");
+const okAllianceStreet = allianceStreet.clanMarket === false
+  && allianceStreet.spice === 10 && allianceStreet.food === 5
+  && allianceStreet.clanSpend > 0 && allianceStreet.clanFood === 0
+  && allianceStreet.stationsSpend > 0 && Math.abs(allianceStreet.delta) < 1
+  && streetTable.includes("СХОДНЯК") && !streetTable.includes("ЗАПРЕТ");
 await page.evaluate(() => window.__gameApi.current.undock());
 
 // Логово в Терминусе (клановый прилавок): контрабанда покупается свободно
@@ -178,8 +195,8 @@ const v8 = await page.evaluate(() => {
 });
 const okV8 = v8.playing === true && v8.intel === 0;
 
-const ok = { okRecord, okSecond, okRefresh, okSave, okUi, okAllianceBan, okLairFree, okV8, noPageErrors: pageErrors.length === 0 };
-console.log(JSON.stringify({ ok, seen: { st0, st1 }, snap: { count: snap0.count, t: e0?.t, now: snap0.now }, upd, allianceBan, lairTrade, lairFlags, v8, pageErrors: pageErrors.slice(0, 3) }, null, 1));
+const ok = { okRecord, okSecond, okRefresh, okSave, okUi, okAllianceStreet, okLairFree, okV8, noPageErrors: pageErrors.length === 0 };
+console.log(JSON.stringify({ ok, seen: { st0, st1 }, snap: { count: snap0.count, t: e0?.t, now: snap0.now }, upd, allianceStreet, lairTrade, lairFlags, v8, pageErrors: pageErrors.slice(0, 3) }, null, 1));
 await browser.close();
 server.close();
 process.exit(Object.values(ok).every(Boolean) ? 0 : 1);

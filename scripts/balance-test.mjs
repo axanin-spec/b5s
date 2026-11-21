@@ -147,30 +147,35 @@ const okDeltaStable = Math.abs(thin.before - thin.after) < 0.5 && Math.abs(fat.b
 // Нюанс 5b: сейв пишет Альянс БРУТТО (кошельки караванов влиты в пул, при загрузке
 // караваны возрождаются и занимают заново) — поэтому с сейвом сверяем alliance+float,
 // а восстановление после reload — тоже по брутто (нетто-альянс зависит от жеребьёвки кошельков).
+// Нюанс 14с: уличные бортники завелись и в союзных системах — их кошельки (часть
+// audit.traderFloat) влиты в БРУТТО КЛАНОВ, а не Альянса; сверяем пулы по раздельности.
 const saved = await page.evaluate(() => {
   window.__gameApi.current.saveNow();
   const a = window.__econAudit();
+  const smug = window.__sim.smugglers().reduce((n, s) => n + s.wallet, 0);
   const raw = localStorage.getItem("game.savegame");
   const sv = raw ? JSON.parse(raw) : null;
-  return { a, sv: sv ? { pools: sv.pools, credits: sv.player.credits, v: sv.v, raid: sv.raid } : null };
+  return { a, smug, sv: sv ? { pools: sv.pools, credits: sv.player.credits, v: sv.v, raid: sv.raid } : null };
 });
 const near = (x, y) => Math.abs(x - y) < 1.5;
 const roundTrip = !!saved.sv && saved.sv.v === 9 && saved.sv.raid === null
-  && near(saved.sv.pools.alliance, saved.a.pools.alliance + saved.a.traderFloat)
-  && ["patrol", "clan", "stations"].every((k) => near(saved.sv.pools[k], saved.a.pools[k]))
+  && near(saved.sv.pools.alliance, saved.a.pools.alliance + saved.a.traderFloat - saved.smug)
+  && near(saved.sv.pools.clan, saved.a.pools.clan + saved.smug)
+  && ["patrol", "stations"].every((k) => near(saved.sv.pools[k], saved.a.pools[k]))
   && near(saved.sv.credits, saved.a.player);
 // перезагрузка → continueGame: delta перенеслась один в один, брутто-Альянс цел
 await page.reload({ waitUntil: "load" });
 await page.waitForFunction(() => window.__GAME_READY__ === true, null, { timeout: 30000 });
 const after = await page.evaluate(() => {
   window.__gameApi.current.continueGame();
-  return window.__econAudit();
+  return { a: window.__econAudit(), smug: window.__sim.smugglers().reduce((n, s) => n + s.wallet, 0) };
 });
-const okRestore = after.delta === saved.a.delta
-  && near(after.pools.alliance + after.traderFloat, saved.sv.pools.alliance)
-  && ["patrol", "clan", "stations"].every((k) => near(after.pools[k], saved.a.pools[k]));
+const okRestore = after.a.delta === saved.a.delta
+  && near(after.a.pools.alliance + after.a.traderFloat - after.smug, saved.sv.pools.alliance)
+  && near(after.a.pools.clan + after.smug, saved.sv.pools.clan)
+  && ["patrol", "stations"].every((k) => near(after.a.pools[k], saved.a.pools[k]));
 
-const okPlayerBound = saved.a.player >= 0 && saved.a.player <= saved.a.total && after.player >= 0 && after.player <= after.total;
+const okPlayerBound = saved.a.player >= 0 && saved.a.player <= saved.a.total && after.a.player >= 0 && after.a.player <= after.a.total;
 
 await done({
   okInvariant, worldAlive: moved, okCurve, okRespawn, okDeltaStable,
@@ -183,8 +188,8 @@ await done({
     start: run1.checkpoints[0]?.pools, end: run1.checkpoints.at(-1)?.pools,
     deltasDistinct: [...new Set(deltas)],
   },
-  deltas: { thinRun: [thin.before, thin.after], fatRun: [fat.before, fat.after], afterLoad: after.delta },
-  saved: { audit: saved.a, save: saved.sv },
-  afterPools: { pools: after.pools, player: after.player, traderFloat: after.traderFloat },
+  deltas: { thinRun: [thin.before, thin.after], fatRun: [fat.before, fat.after], afterLoad: after.a.delta },
+  saved: { audit: saved.a, save: saved.sv, smugglerWallets: saved.smug },
+  afterPools: { pools: after.a.pools, player: after.a.player, traderFloat: after.a.traderFloat, smugglerWallets: after.smug },
   pageErrors: pageErrors.slice(0, 3),
 });
