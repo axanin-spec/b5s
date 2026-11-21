@@ -5,7 +5,8 @@
  * только сама сделка. Проверяет:
  *  1. старт: истребитель с китом — hp/щит/реген/скорость/трюм/DPS из HULLS+EQUIP;
  *  2. консервация денег: покупка корпуса с зачётом, покупка/продажа модуля, сдача
- *     корпуса — delta не шевелится, деньги перетекают игрок ↔ stations 1:1;
+ *     корпуса — delta не шевелится, деньги перетекают игрок ↔ stations 1:1,
+ *     а патрульный тариф (13a, 2% с оборота) идёт stations → patrol точно по LEVY;
  *  2b. терминал 10d: «Макс» набивает трюм до упора (деньги/вместимость — clamp в buy),
  *     «Продать весь трюм» (sellAll) обнуляет его, delta снова не шевелится, кнопки в DOM;
  *  3. гейты: шахта торгует только C/B и корпусами «any»; на хабе SS только с
@@ -109,20 +110,27 @@ const trades = await page.evaluate(() => {
   return { docked, a0, a1, a2, a3, a4, s1, s2, s4, waspInShop: f2.shop.some((g) => g.itemId === "wasp-B"), absentAfterEquip };
 });
 const poolD = (a, b, k) => a.pools[k] - b.pools[k];
+// Этап 13a: патрульный тариф 2% с оборота — станция платит из маржи (stations → patrol)
+const LEVY = (g) => Math.round(g * 0.02);
 const okDock = trades.docked === true;
 const okHullBuy = trades.a1.delta === trades.a0.delta && trades.a1.player === trades.a0.player - 39000
-  && poolD(trades.a1, trades.a0, "stations") === 39000
+  && poolD(trades.a1, trades.a0, "stations") === 39000 - LEVY(39000)
   && trades.s1.ship === "corvette" && trades.s1.hp === 300 && trades.s1.cargo === 48
   && trades.s1.shield === 91 && trades.s1.speed === 430; // 40 плит + черепаха-C 51
 const okModuleBuy = trades.a2.delta === trades.a1.delta && trades.a2.player === trades.a1.player - 5760
-  && poolD(trades.a2, trades.a1, "stations") === 5760 && trades.waspInShop;
+  && poolD(trades.a2, trades.a1, "stations") === 5760 - LEVY(5760) && trades.waspInShop;
 const okEquipDps = trades.s2.installed.weapon[1] === "wasp-B" && trades.absentAfterEquip
   && Math.abs(trades.s2.dps - (9 + 15) * 3.6) < 0.01; // залп из двух стволов под темп лучшего
 const okModuleSell = trades.a3.delta === trades.a2.delta && trades.a3.player === trades.a2.player + 3168
-  && poolD(trades.a3, trades.a2, "stations") === -3168;
+  && poolD(trades.a3, trades.a2, "stations") === -3168 - LEVY(3168);
 const okHullSell = trades.a4.delta === trades.a3.delta && trades.a4.player === trades.a3.player + 25200
-  && poolD(trades.a4, trades.a3, "stations") === -25200
+  && poolD(trades.a4, trades.a3, "stations") === -25200 - LEVY(25200)
   && trades.s4.ship === "fighter" && trades.s4.hp === 120 && trades.s4.installed.engine[0] === "spark-C";
+// okTariff (13a): казна патруля выросла ровно на сумму тарифов четырёх сделок —
+// доходный контур казны больше не зависит от одних штрафов трибунала
+const tariffGot = poolD(trades.a4, trades.a0, "patrol");
+const tariffWant = LEVY(39000) + LEVY(5760) + LEVY(3168) + LEVY(25200);
+const okTariff = tariffGot === tariffWant;
 
 // ── 2b. товарный терминал (10d): «Макс» набивает трюм, «Продать весь трюм» пустит его;
 // delta не шевелится, деньги ходят игрок ↔ stations туда-обратно ──
@@ -271,12 +279,13 @@ const okSave = !!saved.sv && saved.sv.v === 9 && sameFleet(saved.sv.player, save
 
 await done({
   okStart, okDock, okHullBuy, okModuleBuy, okEquipDps, okModuleSell, okHullSell,
+  okTariff,
   okBuyMax, okSellAll, okGoodsUi,
   okMine, okHubGate, okClanGate, okFit, okSave,
   noPageErrors: pageErrors.length === 0,
 }, {
   st0,
-  trades: { money: [trades.a0, trades.a1, trades.a2, trades.a3, trades.a4].map((x) => ({ p: x.player, d: x.delta })), s1: trades.s1, s2: trades.s2, s4: trades.s4 },
+  trades: { money: [trades.a0, trades.a1, trades.a2, trades.a3, trades.a4].map((x) => ({ p: x.player, d: x.delta })), tariff: { got: tariffGot, want: tariffWant }, s1: trades.s1, s2: trades.s2, s4: trades.s4 },
   goods: { used: [goods.used0, goods.used1, goods.used2], credits: goods.credits, cargoMax: goods.cargoMax, ui: goods.ui },
   mine, hubGate, clanGate, fit,
   save: { v: saved.sv?.v, credits: [saved.a.player, restored.a.player], delta: [saved.a.delta, restored.a.delta] },

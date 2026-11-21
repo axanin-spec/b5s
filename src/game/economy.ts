@@ -86,6 +86,23 @@ export function pushFluct(d: Dockable, goodId: string, delta: number): void {
   d.fluct[goodId] = Math.min(ECONOMY.FLUCT_MAX, Math.max(ECONOMY.FLUCT_MIN, cur + delta));
 }
 
+/**
+ * Патрульный тариф (Этап 13a): гражданский оборот облагается в пользу казны —
+ * бойкая торговля жирнит патруль (и крейсер «Варта» возвращается на дозор).
+ * Вызывать после сделки с фактическим оборотом; платит станция из маржи,
+ * цены игрока не тронуты. На чёрном рынке тарифа нет: клановая касса и есть
+ * рынок — их доля уже вся маржа. Радио-сделки (10c) вне биржи — не облагаются.
+ * Инвариант ₡ сохранён: деньги те же, адресат другой. Возвращает собранное.
+ */
+export function levy(c: EconCtx, gross: number, pool: PoolId): number {
+  if (pool !== "stations") return 0;
+  const t = Math.min(Math.round(gross * ECONOMY.TARIFF), Math.round(c.pools.stations));
+  if (t <= 0) return 0;
+  c.pools.stations -= t;
+  c.pools.patrol += t;
+  return t;
+}
+
 /** Репутационный множитель цен Альянса. */
 export function tradeMod(c: EconCtx): { buy: number; sell: number } {
   if (c.player.rep.trader >= REP.FRIENDLY) return REP.PRICE_FRIENDLY;

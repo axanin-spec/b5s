@@ -155,8 +155,11 @@ export const PIRATE_ECON = {
   FUND_FULL: 250_000,
   /** Fund at/below this thins the flotilla to POPULATION.PIRATES_MIN. */
   FUND_THIN: 60_000,
-  /** Protection tax per second from the occupied system's economy (stations → clan). */
-  TAX_PER_SEC: 26,
+  /** Protection tax per second from the occupied system's economy (stations → clan).
+   *  26→40 (Этап 13a): темп восстановления кланов приближен к темпу потерь —
+   *  2400 ₡/мин против 2600 ₡ списания корпуса; активная ферма по-прежнему
+   *  подавляет кланы (дизайн 5c), но без перманентного банкротства. */
+  TAX_PER_SEC: 40,
   /** A convoy lost to raiders: the clans take this from the Alliance fund (alliance → clan). */
   RAID_PLUNDER: 1_200,
 } as const;
@@ -269,6 +272,12 @@ export const ECONOMY = {
    *  strength (TRADER_AI.FLUCT_PUSH): one captain moves a market less than a
    *  supply chain, but a battleship hold dumped at once is felt. */
   PLAYER_FLUCT_PUSH: 0.002,
+  /** Патрульный тариф (Этап 13a): доля гражданского оборота, уходящая в казну
+   *  патруля с каждой сделки на союзных доках (товары, верфь, лавка, ремонт,
+   *  караваны — в обе стороны). Платит станция из своей маржи: цены для игрока
+   *  не меняются. Чёрный рынок не облагается — там касса и есть клановая
+   *  (их «десятина» — вся маржа). Радио-сделки внебиржевые (10c) — тоже мимо. */
+  TARIFF: 0.02,
 } as const;
 
 /* ------------------------------------------------------------------ */
@@ -462,6 +471,11 @@ export const HULLS: readonly HullDef[] = [
 /** Возврат верфи при сдаче корпуса; модули продаёт склад по EQUIP_SELL. */
 export const HULL_SELL = 0.6;
 export const EQUIP_SELL = 0.55;
+
+/** Короткие имена корпусов для строк совместимости модулей: «Рейнджер» · «Ястреб» (Этап 13). */
+export function hullFitLabel(ships: readonly HullId[]): string {
+  return ships.map((id) => HULLS.find((h) => h.id === id)?.name.replace(/^[^«]*«/, "«") ?? id).join(" · ");
+}
 
 export const RANKS = ["C", "B", "A", "S", "SS", "SSS"] as const;
 export type Rank = (typeof RANKS)[number];

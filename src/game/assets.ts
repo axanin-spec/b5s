@@ -27,14 +27,9 @@ export function planetVariant(systemId: string): "" | "_b" {
   return (h & 1) === 0 ? "_b" : "";
 }
 
-/**
- * Planet art PNG → circle-masked canvas (dockables render as circular sprites; the art's
- * black corners would cover the starfield). `variant` (Этап 10e) picks the second art batch
- * ("_b") so two systems with the same planet kinds don't look cloned; missing variant → null,
- * caller keeps the variant-a art or procedural fallback.
- */
-export async function loadPlanetTexture(kind: string, variant = ""): Promise<HTMLCanvasElement | null> {
-  const img = await loadImage(`assets/planets/${kind}${variant}.png`);
+/** PNG → canvas, обрезанный кругом: доки рендерятся circular-спрайтами, чёрные углы арта закрыли бы звёзды. */
+async function loadMaskedSprite(url: string): Promise<HTMLCanvasElement | null> {
+  const img = await loadImage(url);
   if (!img) return null;
   const S = 512;
   const c = document.createElement("canvas");
@@ -48,4 +43,18 @@ export async function loadPlanetTexture(kind: string, variant = ""): Promise<HTM
   ctx.drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, S, S);
   ctx.restore();
   return c;
+}
+
+/**
+ * Планета → masked-спрайт. `variant` (Этап 10e) берёт второй батч арта ("_b"), чтобы системы
+ * с одинаковыми наборами планет не выглядели клонированными; нет варианта → null, вызывающий
+ * возвращает базовый батч или процедурный фолбэк.
+ */
+export function loadPlanetTexture(kind: string, variant = ""): Promise<HTMLCanvasElement | null> {
+  return loadMaskedSprite(`assets/planets/${kind}${variant}.png`);
+}
+
+/** Станция → masked-спрайт (Этап 13): hub/industry/mine/science (+батч "_b") и пиратская "lair". */
+export function loadStationTexture(kind: string, variant = ""): Promise<HTMLCanvasElement | null> {
+  return loadMaskedSprite(`assets/stations/${kind}${variant}.png`);
 }

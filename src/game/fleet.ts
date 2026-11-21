@@ -4,7 +4,7 @@
  * UI-побочки (звук, новости, сейв) остаются в обёртках Game.
  */
 
-import { EMERGENCY_PULSE, EQUIP, EQUIP_LINES, EQUIP_SELL, HULL_SELL, HULLS, PIRATE_BRANCH, RANKS, REPAIR_COST_PER_HP, REP } from "./config";
+import { EMERGENCY_PULSE, EQUIP, EQUIP_LINES, EQUIP_SELL, HULL_SELL, HULLS, PIRATE_BRANCH, RANKS, REPAIR_COST_PER_HP, REP, hullFitLabel } from "./config";
 import type { EquipCat, EquipItem, HullDef, HullId, YardTier } from "./config";
 import type { Dockable, PlayerState } from "./types";
 
@@ -184,14 +184,15 @@ export function fleetSnapshot(c: FleetCtx, d: Dockable) {
     for (const rank of RANKS) {
       const it = EQUIP[`${line.id}-${rank}`];
       if (lineGate(c, d, line, it.rankIdx) === null) {
-        shop.push({ itemId: it.id, name: it.name, cat: line.cat, rank, desc: `${line.desc}: ${it.desc}`, cost: it.cost, canAfford: c.player.credits >= it.cost });
+        // Этап 13: в описании лавки — на какие корпуса встаёт модуль
+        shop.push({ itemId: it.id, name: it.name, cat: line.cat, rank, desc: `${line.desc}: ${it.desc} · для: ${hullFitLabel(line.ships)}`, cost: it.cost, canAfford: c.player.credits >= it.cost });
       }
     }
   }
   const stash = c.player.stash.map((id, idx) => {
     const it = EQUIP[id];
     return {
-      idx, itemId: id, name: it.name, cat: it.cat, rank: it.rank, desc: it.desc,
+      idx, itemId: id, name: it.name, cat: it.cat, rank: it.rank, desc: `${it.desc} · для: ${hullFitLabel(it.ships)}`,
       fits: it.ships.includes(c.player.ship),
       sell: Math.round(it.cost * EQUIP_SELL),
     };

@@ -28,7 +28,7 @@ import {
   mulberry32,
 } from "./textures";
 import type { SystemDef } from "./config";
-import { loadImage, loadPlanetTexture, planetVariant } from "./assets";
+import { loadImage, loadPlanetTexture, loadStationTexture, planetVariant } from "./assets";
 import { economyTick, findDockTarget, generateWorld, goodName, kindName, priceOf, refreshAllPrices, updateOrbits } from "./world";
 import { loadSave, writeSave, importSaveJson } from "./save";
 import { gameApi, uiBridge, type EndStats, type GameApi, type HudData, type MapSnapshot, type RadioSnapshot, type StationSnapshot } from "./uiBridge";
@@ -379,17 +379,28 @@ export class Game {
     this.loadDockArt();
   }
 
-  /** Swap procedural planet canvases for AI art as it loads (fire-and-forget, keeps fallback on miss). */
+  /** Swap procedural planet/station canvases for AI art as it loads (fire-and-forget, keeps fallback on miss). */
   private loadDockArt(): void {
     const gen = ++this.worldGen;
     const variant = planetVariant(this.systemDef.id); // 10e: половина систем рисует второй батч «_b»
     this.dockables.forEach((d, i) => {
-      if (d.isStation) return;
       const adopt = (tex: HTMLCanvasElement | null): void => {
         if (!tex || gen !== this.worldGen || i >= this.dockTex.length) return;
         this.dockTex[i] = tex;
-        this.dockSpinVel[i] = 0; // day/night is baked in the art — spinning it would slide the terminator
+        if (!d.isStation) this.dockSpinVel[i] = 0; // день/ночь на планете запечён — терминатор не крутим
       };
+      if (d.isStation) {
+        // Этап 13: станции тоже получают арт; Логово рисуется единственным артом «lair»,
+        // остальные — по варианту системы. Станция продолжает медленно вращаться: день/ночь
+        // на плоской конструкции не читается, вращение оживляет спрайт.
+        const kind = d.id === PIRATE_BRANCH.LAIR.id ? "lair" : d.kind;
+        const v = kind === "lair" ? "" : variant;
+        void loadStationTexture(kind, v).then((tex) => {
+          if (tex) adopt(tex);
+          else if (v) void loadStationTexture(kind).then(adopt); // «_b» не лег — берём базовый батч
+        });
+        return;
+      }
       void loadPlanetTexture(d.kind, variant).then((tex) => {
         if (tex) adopt(tex);
         else if (variant) void loadPlanetTexture(d.kind).then(adopt); // «_b» не лег — берём базовый батч
@@ -630,6 +641,7 @@ export class Game {
       const income = sold * unit;
       this.pools[pool] -= income;
       s.wallet += income;
+      econ.levy(this, income, pool); // 13a: караванный оборот тоже облагается
       this.pushFluct(here, g.id, -TRADER_AI.FLUCT_PUSH * sold);
     }
 
@@ -656,6 +668,7 @@ export class Game {
           s.cargo[bestG] = (s.cargo[bestG] ?? 0) + q;
           s.wallet -= q * unit;
           this.pools[pool] += q * unit;
+          econ.levy(this, q * unit, pool); // 13a: и закупка каравана — в казну
           this.pushFluct(here, bestG, TRADER_AI.FLUCT_PUSH * q);
         }
       }
@@ -1536,7 +1549,9 @@ export class Game {
     const space = this.cargoMax() - this.cargoUsed();
     const n = Math.min(qty, space, Math.floor(this.player.credits / price));
     if (n <= 0) return;
-    this.pay(n * price, this.tradePool());
+    const pool = this.tradePool();
+    this.pay(n * price, pool);
+    econ.levy(this, n * price, pool); // 13a: патрульный тариф с оборота
     this.player.cargo[goodId] = (this.player.cargo[goodId] ?? 0) + n;
     this.player.traded += n * price;
     // player volume moves the local market too (half caravan strength): buying lifts the price
@@ -1565,6 +1580,7 @@ export class Game {
     const payout = unit * n;
     this.player.cargo[goodId] = have - n;
     const paid = this.gain(payout, pool);
+    econ.levy(this, paid, pool); // 13a: тариф и с продажи — оборот в обе стороны
     this.player.earned += paid;
     this.player.traded += paid;
     // dumping a hold sags the local price — the next hold of the same good pays less
@@ -1628,6 +1644,7 @@ export class Game {
     const pool = this.tradePool();
     if (net > 0) this.pay(net, pool);
     else if (net < 0) this.gain(-net, pool);
+    econ.levy(this, Math.abs(net), pool); // 13a: оборот верфи облагается тоже
     this.setShip(to.id);
     this.audio.sfx("upgrade");
     this.setNews(`⚑ Стапель передаёт вам «${to.name}»: ${net >= 0 ? `доплата ₡${net.toLocaleString("ru-RU")}` : `сдача ₡${(-net).toLocaleString("ru-RU")}`}.`);
@@ -1642,7 +1659,9 @@ export class Game {
     const cur = this.hullDef();
     if (cur.id === "fighter") { this.refuse("сдавать нечего — «Рейнджер» и есть последний плот"); return; }
     const back = Math.round(cur.price * HULL_SELL);
-    this.gain(back, this.tradePool());
+    const pool = this.tradePool();
+    this.gain(back, pool);
+    econ.levy(this, back, pool); // 13a
     this.setShip("fighter");
     this.audio.sfx("upgrade");
     this.setNews(`«${cur.name}» ушёл на слом, верфь вернула ₡${back.toLocaleString("ru-RU")}. Снова истребитель — снова с нуля.`);
@@ -1659,7 +1678,9 @@ export class Game {
     const gate = this.lineGate(d, it, it.rankIdx);
     if (gate) { this.refuse(`«${it.name}» — ${gate}`); return; }
     if (this.player.credits < it.cost) { this.refuse("не хватает кредитов"); return; }
-    this.pay(it.cost, this.tradePool());
+    const pool = this.tradePool();
+    this.pay(it.cost, pool);
+    econ.levy(this, it.cost, pool); // 13a
     this.player.stash.push(it.id);
     this.audio.sfx("trade");
     this.saveNow();
@@ -1673,7 +1694,10 @@ export class Game {
     const it = id ? EQUIP[id] : undefined;
     if (!it) return;
     this.player.stash.splice(stashIdx, 1);
-    this.gain(Math.round(it.cost * EQUIP_SELL), this.tradePool());
+    const got = Math.round(it.cost * EQUIP_SELL);
+    const pool = this.tradePool();
+    this.gain(got, pool);
+    econ.levy(this, got, pool); // 13a
     this.audio.sfx("credits");
     this.saveNow();
     this.pushStation();
@@ -1731,7 +1755,10 @@ export class Game {
     const cost = this.repairCost();
     if (this.player.credits < cost) return;
     // smuggler hands take smuggler coin
-    this.pay(cost, this.dockTarget?.id === PIRATE_BRANCH.LAIR.id ? "clan" : "stations");
+    const pool = this.dockTarget?.id === PIRATE_BRANCH.LAIR.id ? "clan" : "stations";
+    this.pay(cost, pool);
+    // 13a: ремонт — гражданский оборот, но оккупированную систему патруль не облагает
+    if (!this.hereOccupied()) econ.levy(this, cost, pool);
     p.hp = p.maxHp;
     this.audio.sfx("upgrade");
     this.pushStation();
