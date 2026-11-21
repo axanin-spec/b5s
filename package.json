@@ -36,7 +36,9 @@
     "prettl": "npm run build:test",
     "ttl": "node scripts/ttl-test.mjs",
     "prenet": "npm run build:test",
-    "net": "node scripts/net-test.mjs"
+    "net": "node scripts/net-test.mjs",
+    "preboss": "npm run build:test",
+    "boss": "node scripts/boss-test.mjs"
   },
   "dependencies": {
     "react": "^19.2.0",

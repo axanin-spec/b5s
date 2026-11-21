@@ -6,7 +6,7 @@
  */
 
 import {
-  BOLT_CFG, BLACK_STREET, CLAN_ONLY_GOODS, CONTRACTS, CONVOY, ECONOMY, EMERGENCY_PULSE, EQUIP, EQUIP_LINES, EQUIP_SELL, FACTION_CFG, GATE_CFG, GOODS, HULLS, HULL_SELL, MODULE_LOOT, OCCUPATION, PATROL_ECON, PICKUP, PIRATE_BRANCH, PIRATE_ECON, PLAYER_CFG, POPULATION, QUALITY, RANKS, RAID,
+  BOSS_ESC, BOLT_CFG, BLACK_STREET, CLAN_ONLY_GOODS, CONTRACTS, CONVOY, ECONOMY, EMERGENCY_PULSE, EQUIP, EQUIP_LINES, EQUIP_SELL, FACTION_CFG, GATE_CFG, GOODS, HULLS, HULL_SELL, MODULE_LOOT, OCCUPATION, PATROL_ECON, PICKUP, PIRATE_BRANCH, PIRATE_ECON, PLAYER_CFG, POPULATION, QUALITY, RANKS, RAID,
   MONEY_TOTAL, POOLS, REPAIR_COST_PER_HP, REP, SAVE_VERSION, AUTOSAVE_INTERVAL, SMUGGLER, STARTER_KIT, SYSTEMS, TRADER_AI, TRADER_GUILD, TRADER_TIERS, INSPECT, CONTRABAND_GOODS,
   VICTORY_SHARE, WORLD_CFG,
 } from "./config";
@@ -58,6 +58,8 @@ function blankShip(): Ship {
     ai: AiState.Wander, targetIdx: -1, tx: 0, ty: 0, wanderT: 0,
     routeFrom: 0, routeTo: 0, name: "", wallet: 0, smuggler: false, cargo: {},
     escortId: -1, raidId: -1, raidGuard: false, screen: false, cruiser: false, thinkT: 0, thinkDt: 0.42, trailT: 0, regroupT: 0, regroupUsed: false, sprite: null,
+    // 13b: поколение флагмана и асы — нейтрально для всех остальных бортов
+    bossGen: 0, elite: false,
     // 14а: боевой караван и наёмный конвой — нейтральные значения до первого приказа
     angerIdx: -1, angerT: 0, tier: 0, escort: false, escortOf: -1,
     // 14b: гильдейская повинность — отсчёт прибыли, сигнал бедствия, ответ катера
@@ -1075,19 +1077,53 @@ export class Game {
    * The occupation flagship is a resident: it orbits its captured star with an
    * escort screen and comes out to meet whoever enters the system.
    */
+  /** 13b: римская метка поколения для сводок; gen1 — порядковый номер (первый = 1). */
+  private mkLabel(gen1: number): string {
+    const R = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII"];
+    return R[Math.min(Math.max(gen1, 1), R.length) - 1];
+  }
+
+  /** 13b: превращает охранника во флагманский экран; при k<eliteSlots — в аса. */
+  private markEscort(idx: number, k: number, eliteSlots: number): void {
+    if (idx < 0) return;
+    const s = this.ships[idx];
+    s.screen = true; // the flagship's screen carries real gear (Этап 11a)
+    if (k >= eliteSlots) return;
+    s.elite = true;
+    s.maxHp = Math.round(s.maxHp * BOSS_ESC.ELITE_HP); s.hp = s.maxHp;
+    s.maxShield = Math.round(s.maxShield * BOSS_ESC.ELITE_SHIELD); s.shield = s.maxShield;
+    s.dmg = Math.round(s.dmg * BOSS_ESC.ELITE_DMG);
+    s.radius = BOSS_ESC.ELITE_RADIUS;
+    s.name = BOSS_ESC.ACES[k % BOSS_ESC.ACES.length]; // 15b: позывный рисуется над бортом
+  }
+
   private spawnBossResident(): void {
     const a = this.rnd() * Math.PI * 2;
     const x = Math.cos(a) * 2400, y = Math.sin(a) * 2400;
+    // 13b: поколение = сколько флагманов кланы уже потеряли (после победы — песочница)
+    const g = Math.min(this.player.bossKills, BOSS_ESC.GEN_CAP);
     const idx = this.spawnShip("boss", x, y);
     if (idx < 0) return;
+    const b = this.ships[idx];
+    b.bossGen = g;
+    b.name = `Флагман Mk ${this.mkLabel(g + 1)}`; // 15b: подпись над бортом — поколение видно издалека
+    if (g > 0) {
+      b.maxHp = Math.round(b.maxHp * (1 + BOSS_ESC.HP_PER * g)); b.hp = b.maxHp;
+      b.maxShield = Math.round(b.maxShield * (1 + BOSS_ESC.SHIELD_PER * g)); b.shield = b.maxShield;
+      b.dmg = Math.round(b.dmg * (1 + BOSS_ESC.DMG_PER * g));
+      b.fireRate = Math.round(b.fireRate * (1 + BOSS_ESC.RATE_PER * g) * 100) / 100;
+    }
     this.bossIdx = idx;
     this.bossEscortsSpawned = false;
-    for (let k = 0; k < OCCUPATION.ESCORTS; k++) {
-      const ea = (k / OCCUPATION.ESCORTS) * Math.PI * 2;
+    const n = Math.min(BOSS_ESC.ESCORT_CAP, OCCUPATION.ESCORTS + Math.floor(g / BOSS_ESC.EXTRA_EVERY));
+    const eliteSlots = g >= BOSS_ESC.ELITE_FROM ? Math.min(BOSS_ESC.ELITE_CAP, Math.floor(g / 2)) : 0;
+    for (let k = 0; k < n; k++) {
+      const ea = (k / n) * Math.PI * 2;
       const ei = this.spawnShip("pirate", x + Math.cos(ea) * 420, y + Math.sin(ea) * 420);
-      if (ei >= 0) this.ships[ei].screen = true; // the flagship's screen carries real gear (Этап 11a)
+      this.markEscort(ei, k, eliteSlots);
     }
-    this.setNews(`⚑ Флагман кланов вышел навстречу над ${this.systemDef.name}!`);
+    const eliteNote = eliteSlots > 0 ? ` Над экраном кружат асы кланов.` : "";
+    this.setNews(`⚑ Флагман кланов Mk ${this.mkLabel(g + 1)} вышел навстречу над ${this.systemDef.name}!${eliteNote}`);
     this.audio.sfx("alarm");
   }
 
@@ -1206,7 +1242,13 @@ export class Game {
     const cfg = FACTION_CFG[s.faction as keyof typeof FACTION_CFG];
     if (cfg && cfg.bounty[1] > 0 && s.faction !== "trader") {
       // the cruiser carries its own price on the hull (Этап 11b)
-      const bountyRange = s.cruiser ? PATROL_ECON.CRUISER.bounty : cfg.bounty;
+      let bountyRange: readonly number[] = s.cruiser ? PATROL_ECON.CRUISER.bounty : cfg.bounty;
+      // 13b: выкуп над головной машиной тяжелее с каждым поколением —
+      // кланы страхуют флагман дороже и платят за него с той же кассы
+      if (s.faction === "boss" && s.bossGen > 0) {
+        const m = Math.min(BOSS_ESC.BOUNTY_CAP, 1 + BOSS_ESC.BOUNTY_PER * s.bossGen);
+        bountyRange = [Math.round(bountyRange[0] * m), Math.round(bountyRange[1] * m)];
+      }
       const amount = Math.round(bountyRange[0] + this.rnd() * (bountyRange[1] - bountyRange[0]));
       // Pirate bounties come out of the patrol treasury (5c): an empty treasury makes
       // them "deflate" — gain() pays what little it has left. The flagship's ransom
@@ -2788,7 +2830,8 @@ export class Game {
       if (s.faction === "boss") {
         s.wanderT -= dt;
         if (s.wanderT <= 0) {
-          s.wanderT = 3.2;
+          // 13b: с поколением залп часте — «Mk» бьёт плотнее
+          s.wanderT = Math.max(BOSS_ESC.RADIAL_CD_MIN, 3.2 - BOSS_ESC.RADIAL_STEP * s.bossGen);
           const n = 10;
           for (let k = 0; k < n; k++) this.fireBolt(i, (k / n) * Math.PI * 2 + this.rnd(), s.dmg * 0.7, 620);
           if (p.active) this.audio.sfx("enemyLaser");
@@ -2797,9 +2840,11 @@ export class Game {
           this.bossEscortsSpawned = true;
           const e1 = this.spawnShip("pirate", s.x + 260, s.y);
           const e2 = this.spawnShip("pirate", s.x - 260, s.y);
-          if (e1 >= 0) this.ships[e1].screen = true;
-          if (e2 >= 0) this.ships[e2].screen = true;
-          this.setNews("Флагман вызвал подкрепление!");
+          // 13b: с четвёртого флагмана подкрепление приводит асов (Кобра, Призрак)
+          const elite = s.bossGen >= 4;
+          this.markEscort(e1, 2, elite ? 3 : 0);
+          this.markEscort(e2, 3, elite ? 4 : 0);
+          this.setNews(elite ? "Флагман вызвал подкрепление — ведут асы!" : "Флагман вызвал подкрепление!");
         }
       }
 
@@ -3824,6 +3869,31 @@ export class Game {
         if (!HULLS.some((h) => h.id === id)) return null;
         this.setShip(id as HullId);
         return this.player.ship;
+      },
+      // 13b (boss-test): поколение задаётся числом потопленных, спавн/убой — в лоб
+      bossGen: (n: number) => { this.player.bossKills = n; return this.player.bossKills; },
+      bossSpawn: () => { this.spawnBossResident(); return this.bossIdx; },
+      bossKillNow: () => {
+        if (this.bossIdx < 0 || !this.ships[this.bossIdx].active) return false;
+        this.killShip(this.bossIdx, true);
+        return true;
+      },
+      // урон по флагману (бьёт «игрок»): для проверки подкрепления на половине hp
+      bossHurt: (dmg: number) => {
+        if (this.bossIdx < 0 || !this.ships[this.bossIdx].active) return false;
+        this.damageShip(this.bossIdx, dmg, true, 0);
+        return true;
+      },
+      bossInfo: () => {
+        const b = this.bossIdx >= 0 ? this.ships[this.bossIdx] : null;
+        if (!b || !b.active || b.faction !== "boss") return null;
+        const scr: typeof this.ships = [];
+        for (let i = 1; i < this.ships.length; i++) if (this.ships[i].active && this.ships[i].screen) scr.push(this.ships[i]);
+        return {
+          name: b.name, gen: b.bossGen, hp: b.maxHp, shield: b.maxShield, dmg: b.dmg, fireRate: b.fireRate,
+          kills: this.player.bossKills, escorts: scr.length,
+          elites: scr.filter((s) => s.elite).map((s) => ({ name: s.name, hp: s.maxHp, shield: s.maxShield, dmg: s.dmg, radius: s.radius })),
+        };
       },
       // общий шар (15b, трек Б): ростер, собранный игрой к кадру, + наш исходящий state
       net: () => ({

@@ -79,6 +79,10 @@ export interface Ship {
   raidId: number;
   /** Member of the flagship's escort screen (Этап 11a) — its wreck drops real gear. */
   screen: boolean;
+  /** Поколение флагмана (13b): сколько флагманов кланы потеряли до этого спуска. */
+  bossGen: number;
+  /** Элитный ас кланов (13b): усиленный охранник флагмана с позывным. */
+  elite: boolean;
   /** Heavy patrol cruiser «Варта» (Этап 11b) — fielded while the treasury is fat. */
   cruiser: boolean;
   /** Patrol escort raised by the player's raid operation (Этап 5d) — stands down when it ends. */
