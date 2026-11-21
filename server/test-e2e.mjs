@@ -16,6 +16,8 @@ import { chromium } from "playwright";
 
 const API_PORT = 8788;
 const WEB_PORT = 8899;
+/** Уникальный суффикс прогона: осиротевший сервер со старыми юзерами не мешает. */
+const RUN = Date.now().toString(36).slice(-4);
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DIST = path.join(ROOT, "dist");
 const SERVER = path.join(ROOT, "server", "index.mjs");
@@ -52,12 +54,30 @@ async function newPilot(browser, name) {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await ctx.newPage();
   page.on("pageerror", (e) => console.error(`[${name}] pageerror:`, e.message));
+  page.on("console", (m) => { if (m.type() === "error") console.error(`[${name}] console:`, m.text()); });
   await page.goto(`http://localhost:${WEB_PORT}/`, { waitUntil: "networkidle" });
   // регистрация
   await page.fill(".login-input", name);
   await page.fill('input[type="password"]', "secret123");
   await page.click("button.btn-ghost"); // «Регистрация»
-  await page.waitForSelector("#game-canvas", { timeout: 10000 });
+  try {
+    await page.waitForSelector("#game-canvas", { timeout: 10000 });
+  } catch (e) {
+    const errText = await page.evaluate(() => document.querySelector(".login-error")?.textContent || document.body.innerText.slice(0, 300));
+    console.error(`[${name}] login screen state:`, errText);
+    // прямой пробник: тот же запрос из node-процесса харнесса
+    try {
+      const probe = await fetch(`http://localhost:${API_PORT}/api/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: `probe-${Date.now().toString(36)}`, password: "secret123" }),
+      });
+      console.error(`[${name}] direct probe:`, probe.status, JSON.stringify(await probe.json()));
+    } catch (pe) {
+      console.error(`[${name}] direct probe failed:`, pe.message);
+    }
+    throw e;
+  }
   // новая игра
   await page.click("text=Новая игра");
   await page.waitForFunction(() => window.__worldNet?.status === "online", null, { timeout: 10000 });
@@ -67,7 +87,11 @@ async function newPilot(browser, name) {
 const dataDir = await mkdtemp(path.join(tmpdir(), "rangers-e2e-"));
 const apiProc = spawn(process.execPath, [SERVER], {
   env: { ...process.env, PORT: String(API_PORT), DATA_DIR: dataDir },
-  stdio: ["ignore", "ignore", "inherit"],
+  stdio: ["ignore", "ignore", "pipe"],
+});
+let serverErr = "";
+apiProc.stderr.on("data", (c) => {
+  serverErr += c;
 });
 
 let webSrv = null;
@@ -76,6 +100,21 @@ let failed = false;
 
 try {
   await sleep(700);
+  // защита от устаревшего dist: хотя бы один чанк должен указывать на тестовый API-порт
+  {
+    const { readdir } = await import("node:fs/promises");
+    const assets = (await readdir(path.join(DIST, "assets"))).filter((f) => f.endsWith(".js"));
+    let found = false;
+    for (const f of assets) {
+      if ((await readFile(path.join(DIST, "assets", f), "utf8")).includes(`localhost:${API_PORT}`)) {
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      throw new Error(`dist собран не под порт ${API_PORT} — пересоберите: VITE_API_URL=http://localhost:${API_PORT} npm run build`);
+    }
+  }
   webSrv = await serveDist();
   // как в игровых зондах: системный Chrome/Edge, если playwright-билд не установлен
   const CANDIDATES = [
@@ -92,8 +131,10 @@ try {
   }
   if (!browser) throw new Error("no usable browser");
 
-  const A = await newPilot(browser, "Пилот-А");
-  const B = await newPilot(browser, "Пилот-Б");
+  const nameA = `Пилот-А-${RUN}`;
+  const nameB = `Пилот-Б-${RUN}`;
+  const A = await newPilot(browser, nameA);
+  const B = await newPilot(browser, nameB);
   check("оба пилота вошли и подключились к шарду", true);
 
   // ждём взаимной видимости (polling: фоновая страница без rAF — интервал надёжнее)
@@ -101,8 +142,8 @@ try {
   await B.page.waitForFunction(() => window.__worldNet.players.size >= 2, null, { polling: 200, timeout: 8000 });
   const seenByA = await A.page.evaluate(() => [...window.__worldNet.players.values()].map((p) => p.username));
   const seenByB = await B.page.evaluate(() => [...window.__worldNet.players.values()].map((p) => p.username));
-  check("A видит Пилота-Б", seenByA.includes("Пилот-Б"));
-  check("Б видит Пилота-А", seenByB.includes("Пилот-А"));
+  check("A видит Пилота-Б", seenByA.includes(nameB));
+  check("Б видит Пилота-А", seenByB.includes(nameA));
 
   // позиции реально текут (state приходит)
   await A.page.waitForFunction(
@@ -127,6 +168,7 @@ try {
 } catch (e) {
   failed = true;
   console.error("E2E ERROR:", e.message);
+  if (serverErr) console.error("SERVER STDERR:", serverErr.slice(0, 2000));
 } finally {
   if (browser) await browser.close();
   if (webSrv) webSrv.close();

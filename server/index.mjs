@@ -10,7 +10,8 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { handleUpgrade } from "./ws.mjs";
-import { createWorld } from "./world.mjs";
+import { createWorld, POOL_TOPUP_PER_PLAYER } from "./world.mjs";
+import { createLedger } from "./ledger.mjs";
 
 const PORT = Number(process.env.PORT) || 8787;
 const DATA_DIR = process.env.DATA_DIR || path.join(path.dirname(fileURLToPath(import.meta.url)), "data");
@@ -64,6 +65,10 @@ const saveFile = (username) => path.join(SAVES_DIR, encodeURIComponent(username)
 // ---------- общий шард (Этап 15b); владеет world.json ----------
 
 const world = createWorld(DATA_DIR);
+
+// ---------- денежный авторитет (Этап 15c); journal.jsonl + balances.json ----------
+
+const ledger = createLedger(DATA_DIR);
 
 // ---------- auth ----------
 
@@ -176,6 +181,8 @@ async function route(req, res) {
     await updateJson(USERS_FILE, {}, (users) => ({ ...users, [username]: { salt, hash, createdAt: Date.now() } }));
     // Этап 15: регистрация подпитывает общие пулы (+1 000 000 ₡ пропорционально) — общий шард.
     await world.onRegistration();
+    // 15c: та же эмиссия — в денежный журнал (ledger — авторитет по пулам).
+    await ledger.systemTopup(POOL_TOPUP_PER_PLAYER, `register:${username}`);
     return ok(res, { token: await issueToken(username), username });
   }
 
@@ -196,6 +203,38 @@ async function route(req, res) {
 
   if (method === "GET" && url.pathname === "/api/world") {
     return ok(res, { world: world.publicWorld() });
+  }
+
+  // ---------- денежный авторитет (Этап 15c) ----------
+
+  if (url.pathname === "/api/balance" && method === "GET") {
+    const username = await authUser(req);
+    if (!username) return fail(res, 401, "unauthorized");
+    return ok(res, ledger.publicBalances(username));
+  }
+
+  if (url.pathname === "/api/ledger" && method === "GET") {
+    const username = await authUser(req);
+    if (!username) return fail(res, 401, "unauthorized");
+    const limit = Math.min(Number(url.searchParams.get("limit")) || 50, 200);
+    return ok(res, { entries: ledger.historyFor(username, limit) });
+  }
+
+  if ((url.pathname === "/api/tx" || url.pathname === "/api/grant") && method === "POST") {
+    const username = await authUser(req);
+    if (!username) return fail(res, 401, "unauthorized");
+    const kind = url.pathname === "/api/tx" ? "tx" : "grant";
+    try {
+      const body = await readBody(req);
+      const { entry, dedup } = await ledger.transact(username, kind, body || {});
+      return ok(res, { tx: entry, dedup, balance: ledger.balanceOf(entry.to) });
+    } catch (e) {
+      if (e && typeof e.code === "string") {
+        const status = { forbidden: 403, insufficient_funds: 402, grant_cap: 429 }[e.code] || 400;
+        return fail(res, status, e.code);
+      }
+      throw e;
+    }
   }
 
   if (url.pathname === "/api/save") {
@@ -221,9 +260,11 @@ async function route(req, res) {
 
 await mkdir(SAVES_DIR, { recursive: true });
 await world.load();
+await ledger.load(world.publicWorld().pools); // холодный старт: пулы из world.json
 
 const server = createServer((req, res) => {
   route(req, res).catch((err) => {
+    console.error("[rangers-server] route error:", err);
     const code = err?.message === "body_too_large" ? 413 : err?.message === "bad_json" ? 400 : 500;
     fail(res, code, err?.message === "body_too_large" || err?.message === "bad_json" ? err.message : "internal_error");
   });
