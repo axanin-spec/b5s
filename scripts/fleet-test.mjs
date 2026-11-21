@@ -14,6 +14,9 @@
  *     ≥ +35 (оккупированный Никс);
  *  4. совместимость: орудие чужого класса корпусу не встаёт, на своём — встаёт
  *     и поднимает DPS; снятый двигатель заменяется дежурным корпуса;
+ *  4b. торговые корпуса 14f: лихтер на стенде где угодно, барк — только на сборочных
+ *     стапелях; покупка меняет трюм/слоты, чужой фит уезжает на склад, дежурный
+ *     двигатель корпусной; средняя линейка барку встаёт, лёгкая — мимо; ₡ 1:1;
  *  5. сейв v8: корпус/установленное/склад/кредиты/delta через reload один в один.
  *
  * Использование: npm run build && npm run fleet
@@ -258,6 +261,86 @@ const fit = await page.evaluate(() => {
 const okFit = fit.fighterFits === false && fit.rejected && fit.stillStashed
   && fit.hammerEquipped && fit.needleToStash && fit.engineDefaulted;
 
+// ── 4b. торговые корпуса (14f): лихтер/барк — покупка на хабе, гейт верфи на
+//       шахте, переезд фита, конформность средней линейки барку; деньги 1:1 с пулом ──
+const trade = await page.evaluate(() => {
+  const api = window.__gameApi.current;
+  const out = { trace: [] };
+  const tr = (k) => out.trace.push([k, window.__sim.probe()]);
+  // стоим на хабе «Ковчег» (eidolon), корпус фрегат. Лихтер: net = 26000 − 0.6×150000 = −64000 (сдача)
+  tr("entry");
+  window.__sim.cash(500000);
+  const a0 = window.__econAudit();
+  api.buyHull("lighter");
+  const a1 = window.__econAudit();
+  const s1 = window.__sim.ship();
+  const f1 = window.__uiBridge.getSnapshot().station.fleet;
+  out.lighter = {
+    ship: s1.ship, hp: s1.hp, cargo: s1.cargo,
+    wSlots: s1.installed.weapon.length, eDefault: s1.installed.engine[0] === "spark-C",
+    hammerToStash: f1.stash.some((s) => s.itemId === "hammer-C"),
+    gain: a1.player - a0.player, deltaKept: a1.delta === a0.delta,
+    pool: a1.pools.stations - a0.pools.stations,
+  };
+  // шахта: лихтер в стенде (yard «any»), барк заперт (yard «core»); покупка барка — отказ
+  tr("afterLighter");
+  api.undock();
+  tr("afterUndock");
+  out.mineDocked = window.__sim.dockAt("station-2");
+  tr("afterMineDock");
+  const sfm = window.__uiBridge.getSnapshot().station;
+  const fm = sfm ? sfm.fleet : null;
+  const lighterM = fm ? fm.hulls.find((h) => h.id === "lighter") : null;
+  const barkM = fm ? fm.hulls.find((h) => h.id === "bark") : null;
+  // лихтер уже на нас — в стенде он как «ваш корпус», проверяем отсутствие гейта;
+  // барк на шахте обязан быть заперт с объяснением
+  out.lighterGateFree = !!lighterM && !lighterM.why && (lighterM.stock || lighterM.current);
+  out.barkLockedMine = !!barkM && !barkM.stock && !!barkM.why;
+  const aR0 = window.__econAudit();
+  api.buyHull("bark");
+  const aR1 = window.__econAudit();
+  out.refused = window.__sim.ship().ship === "lighter" && aR1.player === aR0.player && aR1.delta === aR0.delta;
+  // хаб: барк (net = 120000 − 0.6×26000 = 104400), искра уезжает на склад, дежурит турбина
+  window.__sim.dockAt("station-0");
+  window.__sim.cash(500000);
+  const a2 = window.__econAudit();
+  api.buyHull("bark");
+  const a3 = window.__econAudit();
+  const s2 = window.__sim.ship();
+  out.bark = {
+    ship: s2.ship, hp: s2.hp, cargo: s2.cargo,
+    wSlots: s2.installed.weapon.length, sSlots: s2.installed.shield.length,
+    sparkToStash: window.__uiBridge.getSnapshot().station.fleet.stash.some((s) => s.itemId === "spark-C"),
+    eDefault: s2.installed.engine[0] === "turbine-C",
+    pay: a2.player - a3.player, deltaKept: a3.delta === a2.delta,
+    pool: a3.pools.stations - a2.pools.stations,
+  };
+  // совместимость 14f: средняя линейка («Шершень») барку встаёт, лёгкая («Игла») — мимо
+  window.__sim.give("wasp-C");
+  window.__sim.give("needle-B");
+  window.__sim.dockAt("station-0");
+  const f3 = window.__uiBridge.getSnapshot().station.fleet;
+  const iw = f3.stash.findIndex((s) => s.itemId === "wasp-C");
+  const inn = f3.stash.findIndex((s) => s.itemId === "needle-B");
+  out.fits = { wasp: f3.stash[iw].fits, needle: f3.stash[inn].fits };
+  api.equipModule(iw, "weapon", 0);
+  out.waspOn = window.__sim.ship().installed.weapon[0] === "wasp-C";
+  api.equipModule(window.__uiBridge.getSnapshot().station.fleet.stash.findIndex((s) => s.itemId === "needle-B"), "weapon", 0);
+  out.needleRejected = window.__sim.ship().installed.weapon[0] === "wasp-C"
+    && window.__uiBridge.getSnapshot().station.fleet.stash.some((s) => s.itemId === "needle-B");
+  return out;
+});
+const okTradeLighter = trade.lighter.ship === "lighter" && trade.lighter.hp === 220 && trade.lighter.cargo === 90
+  && trade.lighter.wSlots === 1 && trade.lighter.eDefault && trade.lighter.hammerToStash
+  && trade.lighter.gain === 64000 && trade.lighter.deltaKept
+  && Math.abs(trade.lighter.pool + (64000 + LEVY(64000))) < 1;
+const okTradeMine = trade.mineDocked && trade.lighterGateFree && trade.barkLockedMine && trade.refused;
+const okTradeBark = trade.bark.ship === "bark" && trade.bark.hp === 560 && trade.bark.cargo === 240
+  && trade.bark.wSlots === 1 && trade.bark.sSlots === 2 && trade.bark.sparkToStash && trade.bark.eDefault
+  && trade.bark.pay === 104400 && trade.bark.deltaKept && Math.abs(trade.bark.pool - (104400 - LEVY(104400))) < 1;
+const okTradeFit = trade.fits.wasp === true && trade.fits.needle === false
+  && trade.waspOn === true && trade.needleRejected === true;
+
 // ── 5. сейв v9: фит, кредиты и delta через перезагрузку ──
 const saved = await page.evaluate(() => {
   window.__gameApi.current.saveNow();
@@ -281,13 +364,15 @@ await done({
   okStart, okDock, okHullBuy, okModuleBuy, okEquipDps, okModuleSell, okHullSell,
   okTariff,
   okBuyMax, okSellAll, okGoodsUi,
-  okMine, okHubGate, okClanGate, okFit, okSave,
+  okMine, okHubGate, okClanGate, okFit,
+  okTradeLighter, okTradeMine, okTradeBark, okTradeFit,
+  okSave,
   noPageErrors: pageErrors.length === 0,
 }, {
   st0,
   trades: { money: [trades.a0, trades.a1, trades.a2, trades.a3, trades.a4].map((x) => ({ p: x.player, d: x.delta })), tariff: { got: tariffGot, want: tariffWant }, s1: trades.s1, s2: trades.s2, s4: trades.s4 },
   goods: { used: [goods.used0, goods.used1, goods.used2], credits: goods.credits, cargoMax: goods.cargoMax, ui: goods.ui },
-  mine, hubGate, clanGate, fit,
+  mine, hubGate, clanGate, fit, trade,
   save: { v: saved.sv?.v, credits: [saved.a.player, restored.a.player], delta: [saved.a.delta, restored.a.delta] },
   pageErrors: pageErrors.slice(0, 3),
 });

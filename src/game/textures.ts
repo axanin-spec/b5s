@@ -110,10 +110,22 @@ function shipBody(style: ShipStyle, variant = 0): Path2D {
   return body;
 }
 
-/** Player hull line (Этап 7): 0 истребитель · 1 корвет · 2 фрегат · 3 линкор. */
+/** Player hull line (Этап 7, торговая ветка 14f): 0 истребитель · 1 корвет · 2 фрегат · 3 линкор · 4 лихтер · 5 барк. */
 function playerBody(hull: number): Path2D {
   const b = new Path2D();
-  if (hull === 3) {
+  if (hull === 4) {
+    // lighter «Чайка»: blunt freighter bow, wide boxy midship for the hold
+    b.moveTo(0, -46); b.lineTo(14, -30); b.lineTo(22, -14); b.lineTo(38, -2); b.lineTo(40, 22);
+    b.lineTo(30, 40); b.lineTo(14, 36); b.lineTo(10, 46); b.lineTo(-10, 46);
+    b.lineTo(-14, 36); b.lineTo(-30, 40); b.lineTo(-40, 22); b.lineTo(-38, -2);
+    b.lineTo(-22, -14); b.lineTo(-14, -30); b.closePath();
+  } else if (hull === 5) {
+    // bark «Гость»: fat wide-body hauler, blunt nose, twin stern ramps
+    b.moveTo(0, -44); b.lineTo(18, -32); b.lineTo(30, -20); b.lineTo(52, -6); b.lineTo(54, 18);
+    b.lineTo(44, 26); b.lineTo(38, 44); b.lineTo(16, 40); b.lineTo(10, 50); b.lineTo(-10, 50);
+    b.lineTo(-16, 40); b.lineTo(-38, 44); b.lineTo(-44, 26); b.lineTo(-54, 18); b.lineTo(-52, -6);
+    b.lineTo(-30, -20); b.lineTo(-18, -32); b.closePath();
+  } else if (hull === 3) {
     // battleship: broad layered sponsons, flat command deck
     b.moveTo(0, -56); b.lineTo(18, -36); b.lineTo(34, -30); b.lineTo(54, -4); b.lineTo(50, 16);
     b.lineTo(34, 20); b.lineTo(30, 44); b.lineTo(12, 40); b.lineTo(8, 52); b.lineTo(-8, 52);
@@ -342,7 +354,7 @@ export function makeShipTexture(style: ShipStyle, variant = 0, up?: ShipUpgrades
       ctx.fillStyle = hot ? gold : col.glow;
       ctx.fillRect(-2, 32, 4, 4);
     }
-    if (up.hull >= 2) {
+    if (up.hull === 2 || up.hull === 3) {
       // armour chevrons over the wings (frigate and up)
       for (const sx of [-1, 1]) {
         ctx.fillStyle = shade(col.trim, -0.15);
@@ -351,13 +363,28 @@ export function makeShipTexture(style: ShipStyle, variant = 0, up?: ShipUpgrades
         ctx.closePath(); ctx.fill();
       }
     }
-    if (up.hull >= 3) {
+    if (up.hull === 3) {
       // command deck spine (battleship)
       ctx.fillStyle = shade(col.trim, 0.1);
       ctx.fillRect(-7, 2, 14, 26);
       ctx.strokeStyle = "rgba(230,245,255,0.5)";
       ctx.lineWidth = 1.5;
       ctx.strokeRect(-7, 2, 14, 26);
+    }
+    if (up.hull >= 4) {
+      // 14f: deck cargo on trade hulls — containers stacked behind the cockpit
+      const tones = ["#b08a4a", "#8f742e", "#c9a86a"];
+      const rows = up.hull >= 5 ? 3 : 2;
+      for (let row = 0; row < rows; row++) {
+        for (const sx of [-1, 1]) {
+          const x = sx < 0 ? -22 : 4, y = 2 + row * 12;
+          ctx.fillStyle = tones[(row + (sx < 0 ? 0 : 1)) % tones.length];
+          ctx.fillRect(x, y, 18, 10);
+          ctx.strokeStyle = "rgba(10,10,14,0.6)";
+          ctx.lineWidth = 1.2;
+          ctx.strokeRect(x, y, 18, 10);
+        }
+      }
     }
     if (up.shield >= 2) {
       for (const sx of [-1, 1]) {

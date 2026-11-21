@@ -517,7 +517,7 @@ export const PIRATE_BRANCH = {
 /* Флот (Этап 7): корпуса + снаряжение рангов C–SSS                    */
 /* ------------------------------------------------------------------ */
 
-export type HullId = "fighter" | "corvette" | "frigate" | "battleship";
+export type HullId = "fighter" | "corvette" | "frigate" | "battleship" | "lighter" | "bark";
 
 /** Насколько крупный док держит корпус или линию снаряжения на стенде. */
 export type YardTier = "any" | "core" | "flag";
@@ -562,6 +562,18 @@ export const HULLS: readonly HullDef[] = [
     id: "battleship", name: "Линкор «Суверен»", desc: "Мобильная крепость: три орудия, трюм грузовоза",
     price: 380_000, radius: 48, hp: 1100, shieldPlate: 150, accel: 250, maxSpeed: 330, cargo: 130,
     slots: { weapon: 3, shield: 2, engine: 1 }, yard: "flag", defaultEngine: "reactor-C",
+  },
+  // 14f: торговая ветка — трюм за счёт орудий. Профессия «торговец»: ходка лихтера
+  // везёт почти вдвое против корвета за те же деньги, но в перестрелке он мишень.
+  {
+    id: "lighter", name: "Лихтер «Чайка»", desc: "Торговая площадь вместо второго орудия: трюм велик, пушка одна",
+    price: 26_000, radius: 36, hp: 220, shieldPlate: 20, accel: 270, maxSpeed: 350, cargo: 90,
+    slots: { weapon: 1, shield: 1, engine: 1 }, yard: "any", defaultEngine: "spark-C",
+  },
+  {
+    id: "bark", name: "Барк «Гость»", desc: "Плавучий склад: трюм втрое против фрегата, орудие — для протокола",
+    price: 120_000, radius: 46, hp: 560, shieldPlate: 120, accel: 210, maxSpeed: 280, cargo: 240,
+    slots: { weapon: 1, shield: 2, engine: 1 }, yard: "core", defaultEngine: "turbine-C",
   },
 ];
 
@@ -620,15 +632,17 @@ export interface EquipLine {
 }
 
 export const EQUIP_LINES: readonly EquipLine[] = [
-  { id: "needle", name: "Игла", cat: "weapon", ships: ["fighter", "corvette"], mult: 0.85, cost: 1_300, yard: "any", desc: "лёгкий эмиттер" },
-  { id: "wasp", name: "Шершень", cat: "weapon", ships: ["corvette", "frigate"], mult: 1, cost: 1_800, yard: "core", desc: "импульсная пушка" },
+  // 14f: лихтер живёт на лёгкой линейке (игла/черепаха/искра), барк — на средней
+  // (шершень/бастион/турбина): тяжёлые орудия торговым корпусам не положены.
+  { id: "needle", name: "Игла", cat: "weapon", ships: ["fighter", "corvette", "lighter"], mult: 0.85, cost: 1_300, yard: "any", desc: "лёгкий эмиттер" },
+  { id: "wasp", name: "Шершень", cat: "weapon", ships: ["corvette", "frigate", "bark"], mult: 1, cost: 1_800, yard: "core", desc: "импульсная пушка" },
   { id: "hammer", name: "Молот", cat: "weapon", ships: ["frigate", "battleship"], mult: 1.3, cost: 2_600, yard: "core", desc: "масс-драйвер" },
   { id: "lance", name: "Сингулярность", cat: "weapon", ships: ["battleship"], mult: 1.7, cost: 4_200, yard: "flag", desc: "гравитационная пика" },
-  { id: "turtle", name: "Черепаха", cat: "shield", ships: ["fighter", "corvette"], mult: 0.85, cost: 1_100, yard: "any", desc: "дефлектор" },
-  { id: "bastion", name: "Бастион", cat: "shield", ships: ["corvette", "frigate"], mult: 1, cost: 1_600, yard: "core", desc: "щитовик" },
+  { id: "turtle", name: "Черепаха", cat: "shield", ships: ["fighter", "corvette", "lighter"], mult: 0.85, cost: 1_100, yard: "any", desc: "дефлектор" },
+  { id: "bastion", name: "Бастион", cat: "shield", ships: ["corvette", "frigate", "bark"], mult: 1, cost: 1_600, yard: "core", desc: "щитовик" },
   { id: "citadel", name: "Цитадель", cat: "shield", ships: ["frigate", "battleship"], mult: 1.25, cost: 2_400, yard: "flag", desc: "полевой щит" },
-  { id: "spark", name: "Искра", cat: "engine", ships: ["fighter", "corvette"], mult: 1.05, cost: 900, yard: "any", desc: "химфортунка" },
-  { id: "turbine", name: "Турбина", cat: "engine", ships: ["corvette", "frigate"], mult: 1, cost: 1_400, yard: "core", desc: "плазменная турбина" },
+  { id: "spark", name: "Искра", cat: "engine", ships: ["fighter", "corvette", "lighter"], mult: 1.05, cost: 900, yard: "any", desc: "химфортунка" },
+  { id: "turbine", name: "Турбина", cat: "engine", ships: ["corvette", "frigate", "bark"], mult: 1, cost: 1_400, yard: "core", desc: "плазменная турбина" },
   { id: "reactor", name: "Реактор", cat: "engine", ships: ["frigate", "battleship"], mult: 0.92, cost: 2_200, yard: "core", desc: "термоядро" },
 ];
 
