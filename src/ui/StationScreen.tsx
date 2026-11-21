@@ -1,11 +1,14 @@
 import { useState } from 'react'
 import { GOODS, REP, repLabel } from '@/game/config'
 import { gameApi, type StationSnapshot } from '@/game/uiBridge'
-import { GoodIcon } from './GoodIcon'
+import { EquipIcon, GoodIcon } from './GoodIcon'
 
 function fmt(n: number): string {
   return n.toLocaleString('ru-RU')
 }
+
+/** itemId «wasp-A» → id линии «wasp» — по нему ищется иконка модуля (Этап 13). */
+const lineOf = (itemId: string) => itemId.slice(0, itemId.lastIndexOf('-'))
 
 function mmss(sec: number): string {
   const s = Math.max(0, Math.ceil(sec))
@@ -239,6 +242,7 @@ export function StationScreen({ s }: { s: StationSnapshot }) {
                     {row.items.map((it) => (
                       <div className="gear-row" key={it.slot}>
                         <span className={`rank-chip ${it.itemId ? 'on' : ''}`}>{it.rank || '—'}</span>
+                        {it.itemId && <EquipIcon line={lineOf(it.itemId)} className="sm" />}
                         <span className="gear-info">
                           <b>{it.name}</b>
                           <em>{it.desc}</em>
@@ -256,6 +260,7 @@ export function StationScreen({ s }: { s: StationSnapshot }) {
                     {s.fleet.stash.map((st) => (
                       <div className="gear-row" key={st.idx}>
                         <span className="rank-chip on">{st.rank}</span>
+                        <EquipIcon line={lineOf(st.itemId)} className="sm" />
                         <span className="gear-info">
                           <b>{st.name}</b>
                           <em>{st.desc}{st.fits ? '' : ' · не по корпусу'}</em>
@@ -277,6 +282,7 @@ export function StationScreen({ s }: { s: StationSnapshot }) {
                   {s.fleet.shop.map((g) => (
                     <div className="gear-row" key={g.itemId}>
                       <span className="rank-chip on">{g.rank}</span>
+                      <EquipIcon line={lineOf(g.itemId)} className="sm" />
                       <span className="gear-info">
                         <b>{g.name}</b>
                         <em>{CAT_NAMES[g.cat]} · {g.desc}</em>

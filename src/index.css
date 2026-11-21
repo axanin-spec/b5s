@@ -656,6 +656,7 @@ kbd {
   margin-bottom: 6px;
 }
 .gear-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+.gear-row .good-ico { margin-right: 0; }
 .gear-info { flex: 1; min-width: 0; font-size: 12px; color: #eafff8; }
 .gear-info b { margin-right: 6px; }
 .gear-info em { display: block; font-style: normal; font-size: 11px; color: var(--text-dim); }
