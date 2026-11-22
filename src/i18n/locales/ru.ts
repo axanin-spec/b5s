@@ -42,7 +42,7 @@ export const ru = {
   "title.nameSub": "BEYOND THE 5TH SUN",
   "title.sub": "Торгуйте между мирами · Сражайтесь с пиратами и пилотами · Возите контрабанду · Охотьтесь за головами",
   "title.continue": "Продолжить полёт",
-  "title.new": "Новая игра",
+  "title.begin": "Начать полёт",
   "title.soundOn": "🔊 Звук включён",
   "title.soundOff": "🔇 Звук выключен",
   "title.settings": "⚙ Настройки",

@@ -31,13 +31,8 @@ export function TitleScreen({ hasSave, muted }: { hasSave: boolean; muted: boole
         <div className="title-sub">{t('title.sub')}</div>
       </div>
       <div className="menu-buttons">
-        {hasSave && (
-          <button className="btn btn-primary" onClick={() => api()?.continueGame()}>
-            {t('title.continue')}
-          </button>
-        )}
-        <button className={`btn ${hasSave ? '' : 'btn-primary'}`} onClick={() => api()?.newGame()}>
-          {t('title.new')}
+        <button className="btn btn-primary" onClick={() => api()?.continueGame()}>
+          {hasSave ? t('title.continue') : t('title.begin')}
         </button>
         <button className="btn btn-ghost" onClick={() => api()?.toggleMute()}>
           {muted ? t('title.soundOff') : t('title.soundOn')}

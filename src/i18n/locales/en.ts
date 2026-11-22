@@ -41,7 +41,7 @@ export const en = {
   "title.nameSub": "BEYOND THE 5TH SUN",
   "title.sub": "Trade between worlds · Fight pirates and pilots · Run contraband · Hunt bounties",
   "title.continue": "Continue flight",
-  "title.new": "New game",
+  "title.begin": "Begin flight",
   "title.soundOn": "🔊 Sound on",
   "title.soundOff": "🔇 Sound off",
   "title.settings": "⚙ Settings",
