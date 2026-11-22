@@ -1,54 +1,68 @@
 import { useState } from 'react'
 import { gameApi } from '@/game/uiBridge'
 import { SettingsPanel } from './SettingsPanel'
+import { LOCALES, setLocale, useI18n, type Locale } from '@/i18n'
 
 export function TitleScreen({ hasSave, muted }: { hasSave: boolean; muted: boolean }) {
   const [settings, setSettings] = useState(false)
+  const [locale, t] = useI18n()
   const api = () => gameApi.current
   return (
     <div className="screen title-screen">
       <div className="title-block">
-        <div className="title-over">ОДИН КОРАБЛЬ. ТРИ СИСТЕМЫ. ЦЕЛЫЙ КОСМОС.</div>
-        <h1 className="game-title">КОСМИЧЕСКИЙ<br />РЕЙНДЖЕР</h1>
-        <div className="title-sub">Торгуйте между планетами · Отбивайтесь от пиратов · Прокачивайте корабль · Прыгайте между звёздными системами</div>
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginBottom: 8 }}>
+          {(Object.keys(LOCALES) as Locale[]).map((l) => (
+            <button
+              key={l}
+              className={l === locale ? 'btn btn-primary' : 'btn btn-ghost'}
+              style={{ padding: '2px 10px', fontSize: 12 }}
+              onClick={() => setLocale(l)}
+            >
+              {LOCALES[l].label}
+            </button>
+          ))}
+        </div>
+        <div className="title-over">{t('title.over')}</div>
+        <h1 className="game-title">
+          {t('title.name')}
+          <br />
+          <span style={{ fontSize: '0.42em', letterSpacing: '0.18em' }}>{t('title.nameSub')}</span>
+        </h1>
+        <div className="title-sub">{t('title.sub')}</div>
       </div>
       <div className="menu-buttons">
         {hasSave && (
           <button className="btn btn-primary" onClick={() => api()?.continueGame()}>
-            Продолжить полёт
+            {t('title.continue')}
           </button>
         )}
         <button className={`btn ${hasSave ? '' : 'btn-primary'}`} onClick={() => api()?.newGame()}>
-          Новая игра
+          {t('title.new')}
         </button>
         <button className="btn btn-ghost" onClick={() => api()?.toggleMute()}>
-          {muted ? '🔇 Звук выключен' : '🔊 Звук включён'}
+          {muted ? t('title.soundOff') : t('title.soundOn')}
         </button>
         <button className="btn btn-ghost" onClick={() => setSettings((v) => !v)}>
-          ⚙ Настройки
+          {t('title.settings')}
         </button>
         {settings && <SettingsPanel onClose={() => setSettings(false)} />}
       </div>
       <div className="help-panel">
         <div className="help-col">
-          <div className="help-title">Компьютер</div>
-          <div><kbd>W A S D</kbd> — тяга двигателей</div>
-          <div><kbd>Мышь</kbd> — прицел, <kbd>ЛКМ</kbd>/<kbd>Пробел</kbd> — огонь</div>
-          <div><kbd>E</kbd> — стыковка / гиперпрыжок · <kbd>M</kbd> — звёздная карта</div>
-          <div><kbd>Esc</kbd> — пауза (сначала закрывает карту)</div>
+          <div className="help-title">{t('title.helpPc')}</div>
+          <div><kbd>W A S D</kbd> — {t('title.helpPc1')}</div>
+          <div><kbd>{t('title.helpMouse')}</kbd> — {t('title.helpPc2')} <kbd>ЛКМ</kbd>/<kbd>Space</kbd> — {t('title.helpPc3')}</div>
+          <div><kbd>E</kbd> — {t('title.helpPc4')} · <kbd>M</kbd> — {t('title.helpPc5')}</div>
+          <div><kbd>Esc</kbd> — {t('title.helpPc6')}</div>
         </div>
         <div className="help-col">
-          <div className="help-title">Планшет и телефон</div>
-          <div>Левая половина экрана — джойстик тяги</div>
-          <div>Кнопка <b>ОГОНЬ</b> — авто-прицел по ближайшему врагу</div>
-          <div>Кнопки <b>СТЫКОВКА</b> и <b>ГИПЕРПРЫЖОК</b> появляются у станций и врат</div>
+          <div className="help-title">{t('title.helpTouch')}</div>
+          <div>{t('title.helpTouch1')}</div>
+          <div><b>{t('title.fire')}</b> — {t('title.helpTouch2')}</div>
+          <div><b>{t('title.dock')}</b> & <b>{t('title.jump')}</b> — {t('title.helpTouch3')}</div>
         </div>
       </div>
-      <div className="title-foot">
-        Цели: выкупить четверть экономики Галактики (доля рынка 25%) — или потопить три флагмана пиратов в оккупированных системах.
-        Клавиша <b>M</b> — звёздная карта галактики. Врата на окраине системы ведут в Кронос и Никс:
-        там свои специализации, свои цены и пиратский фронт. Прогресс сохраняется автоматически в этом браузере.
-      </div>
+      <div className="title-foot">{t('title.foot')}</div>
     </div>
   )
 }
