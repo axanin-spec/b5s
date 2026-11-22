@@ -54,7 +54,7 @@ export default function Home() {
         {(snap.screen === 'playing' || snap.screen === 'paused') && snap.hud && (
           <Hud snap={snap} isTouch={isTouch} />
         )}
-        {snap.screen === 'title' && <TitleScreen hasSave={snap.hasSave} muted={snap.muted} />}
+        {snap.screen === 'title' && <TitleScreen muted={snap.muted} />}
         {snap.screen === 'paused' && <PauseMenu muted={snap.muted} />}
         {snap.mapOpen && snap.map && snap.screen === 'playing' && <StarMap map={snap.map} />}
         {snap.screen === 'docked' && snap.station && <StationScreen s={snap.station} />}

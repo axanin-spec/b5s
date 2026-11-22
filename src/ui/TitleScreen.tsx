@@ -3,7 +3,7 @@ import { gameApi } from '@/game/uiBridge'
 import { SettingsPanel } from './SettingsPanel'
 import { LOCALES, setLocale, useI18n, type Locale } from '@/i18n'
 
-export function TitleScreen({ hasSave, muted }: { hasSave: boolean; muted: boolean }) {
+export function TitleScreen({ muted }: { muted: boolean }) {
   const [settings, setSettings] = useState(false)
   const [locale, t] = useI18n()
   const api = () => gameApi.current
@@ -32,7 +32,7 @@ export function TitleScreen({ hasSave, muted }: { hasSave: boolean; muted: boole
       </div>
       <div className="menu-buttons">
         <button className="btn btn-primary" onClick={() => api()?.continueGame()}>
-          {hasSave ? t('title.continue') : t('title.begin')}
+          {t('title.fly')}
         </button>
         <button className="btn btn-ghost" onClick={() => api()?.toggleMute()}>
           {muted ? t('title.soundOff') : t('title.soundOn')}
