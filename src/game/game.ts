@@ -17,7 +17,7 @@ import * as fleet from "./fleet";
 import * as missions from "./missions";
 import { renderFrame, renderGlFrame, paletteTex } from "./render";
 import type { RemoteBlip } from "./render";
-import type { Renderer3D } from "./gl"; // 12d: только тип — three уезжает в async-чанк (dynamic import)
+import { GlLayer } from "./gllayer"; // 13f: жизненный цикл WebGL-слоя — свой модуль (three остаётся async-чанком)
 import { loadSettings, onSettingsChange, type RenderPref } from "./settings";
 import { GameLoop } from "./engine";
 import { Input } from "./input";
@@ -285,6 +285,14 @@ export class Game {
 
   constructor(private canvas: HTMLCanvasElement) {
     this.ctx = canvas.getContext("2d")!;
+    // 13f: слой живёт в gllayer.ts; адаптер — минимальная поверхность Game, которую слой трогает
+    const me = this;
+    this.glLayer = new GlLayer({
+      canvas,
+      get disposed() { return me.disposed; },
+      onResize: () => me.onResize(),
+      setNews: (t) => me.setNews(t),
+    });
     this.onResize();
 
     this.input = new Input(canvas);
@@ -544,14 +552,15 @@ export class Game {
     // adaptive world scale: phones see a slightly wider area so the ship stays readable
     this.ppu = Math.max(0.42, Math.min(1.05, Math.min(w / 1500, h / 950) + 0.32));
     // 3D-режим (12a): нижний 2D-холст и GL-канвас живут в тех же размерах, что и канвас ввода
-    if (this.gl3d && this.bgCanvas && this.bgCtx) {
-      this.gl3d.resize(w, h, this.ppu, dpr * ss);
-      this.bgCanvas.width = this.canvas.width;
-      this.bgCanvas.height = this.canvas.height;
-      this.bgCanvas.style.width = `${w}px`;
-      this.bgCanvas.style.height = `${h}px`;
-      this.bgCtx.setTransform(dpr * ss, 0, 0, dpr * ss, 0, 0);
-      this.bgCtx.imageSmoothingQuality = "high";
+    const gl = this.glLayer;
+    if (gl.gl3d && gl.bgCanvas && gl.bgCtx) {
+      gl.gl3d.resize(w, h, this.ppu, dpr * ss);
+      gl.bgCanvas.width = this.canvas.width;
+      gl.bgCanvas.height = this.canvas.height;
+      gl.bgCanvas.style.width = `${w}px`;
+      gl.bgCanvas.style.height = `${h}px`;
+      gl.bgCtx.setTransform(dpr * ss, 0, 0, dpr * ss, 0, 0);
+      gl.bgCtx.imageSmoothingQuality = "high";
     }
   }
 
@@ -3463,122 +3472,26 @@ export class Game {
   /* ================================================================== */
 
   /** "2d" — Canvas2D, "3d" — WebGL-«шуба» three.js под той же симуляцией (дефолт — из settings). */
-  renderMode: "2d" | "3d" = "2d";
-  private gl3d: Renderer3D | null = null;
-  private glCanvas: HTMLCanvasElement | null = null;
-  private bgCanvas: HTMLCanvasElement | null = null;
-  private bgCtx: CanvasRenderingContext2D | null = null;
-  // 12d: three тянется лениво (dynamic import) — в 2D-режиме асинхронный чанк не грузится;
-  // glFailed — контекст WebGL терялся в этой сессии, больше не пробуем (до перезагрузки).
-  private glMod: typeof import("./gl") | null = null;
-  private glLoading: Promise<boolean> | null = null;
-  private glFailed = false;
+  // 13f (9e): весь жизненный цикл слоя — в gllayer.ts; здесь геттер режима, тонкие обёртки
+  // и чтение слоя для onResize/render/screenToWorld/проб. three по-прежнему async-чанк.
+  private readonly glLayer: GlLayer; // инициализируется в конструкторе (адаптер на this)
+
+  get renderMode(): "2d" | "3d" { return this.glLayer.mode; }
   private unsubRender: (() => void) | null = null;
 
   private render(): void {
     this.syncRemotes();
-    if (this.renderMode === "3d" && this.gl3d && this.bgCtx) renderGlFrame(this, this.gl3d, this.bgCtx);
+    if (this.renderMode === "3d" && this.glLayer.gl3d && this.glLayer.bgCtx) renderGlFrame(this, this.glLayer.gl3d, this.glLayer.bgCtx);
     else renderFrame(this);
   }
 
-  /** Cheap WebGL2 capability probe without loading three (тот же тест, что «auto» в настройках). */
-  static hasWebGL2(): boolean {
-    try {
-      const probe = document.createElement("canvas");
-      return probe.getContext("webgl2") !== null;
-    } catch {
-      return false;
-    }
-  }
+  /** Реакция на настройку render (boot + onSettingsChange): применить режим немедленно (менеджер — gllayer.ts). */
+  private applyRender(pref: RenderPref): void { this.glLayer.apply(pref); }
 
-  /** Настройка → конкретный режим; «auto» = 3d при WebGL2 (12d: дефолт — 3d на GPU-браузерах). */
-  private resolveRender(pref: RenderPref): "2d" | "3d" {
-    if (pref === "2d") return "2d";
-    if (pref === "3d") return "3d";
-    return Game.hasWebGL2() && !this.glFailed ? "3d" : "2d";
-  }
+  /** Включить WebGL-слой (полный цикл — gllayer.ts): ждёт dynamic-импорт three; false при отказе GPU. */
+  enable3d(): Promise<boolean> { return this.glLayer.enable(); }
 
-  /** Загрузить модуль gl (three) одним обещанием; false при сетевой ошибке чанка. */
-  private loadGl(): Promise<boolean> {
-    if (this.glMod) return Promise.resolve(true);
-    if (!this.glLoading) {
-      this.glLoading = import("./gl").then(
-        (m) => { this.glMod = m; return true; },
-        () => false,
-      );
-    }
-    return this.glLoading;
-  }
-
-  /** Реакция на настройку render (boot + onSettingsChange): применить режим немедленно. */
-  private applyRender(pref: RenderPref): void {
-    if (this.resolveRender(pref) === "3d") void this.enable3d();
-    else this.disable3d();
-  }
-
-  /**
-   * Включить WebGL-слой. Под канвас ввода вставляются ещё два холста: нижний — 2D-фон,
-   * средний — GL-мир; весь мышиный ввод остаётся на #game-canvas (он остался верхним).
-   * 12d: ждёт dynamic-импорт three; false — если WebGL недоступен/чанк не загрузился
-   * (игра продолжает в 2D). Потеря GL-контекста → автооткат в 2D (webglcontextlost).
-   */
-  async enable3d(): Promise<boolean> {
-    if (this.renderMode === "3d") return true;
-    if (this.glFailed || !(await this.loadGl())) return false;
-    if (this.disposed) return false; // игра умерла, пока грузился чанк
-    // после await параллельный enable3d мог всё сделать — перечитываем поле мимо сужения TS
-    if ((this.renderMode as "2d" | "3d") === "3d") return true; // пока грузили, включил другой вызов
-    const mod = this.glMod;
-    if (!mod) return false;
-    if (!this.gl3d) {
-      try {
-        const css = "position:absolute;inset:0;width:100%;height:100%;pointer-events:none";
-        const bg = document.createElement("canvas");
-        bg.id = "bg-canvas";
-        bg.style.cssText = css;
-        const bgCtx = bg.getContext("2d");
-        if (!bgCtx) return false;
-        const glc = document.createElement("canvas");
-        glc.id = "gl-canvas";
-        glc.style.cssText = css;
-        this.bgCanvas = bg;
-        this.bgCtx = bgCtx;
-        this.gl3d = new mod.Renderer3D(glc);
-        glc.addEventListener("webglcontextlost", this.onGlContextLost);
-        this.glCanvas = glc;
-        const parent = this.canvas.parentElement ?? document.body;
-        parent.insertBefore(bg, this.canvas);
-        parent.insertBefore(glc, this.canvas);
-        this.onResize(); // задает размеры обоих новых холстов под текущий dpr/ppu
-      } catch {
-        this.disable3d();
-        return false;
-      }
-    }
-    this.renderMode = "3d";
-    return true;
-  }
-
-  /** Драйвер/вкладка потеряли GL-контекст: preventDefault даёт шанс на restore, но мы
-   * просто откатываемся в 2D и до перезагрузки 3d больше не пробуем (глочить цикл падений). */
-  private onGlContextLost = (e: Event): void => {
-    e.preventDefault();
-    this.glFailed = true;
-    this.disable3d();
-    this.setNews("Контекст WebGL потерян — включён режим 2D. Перезагрузите страницу для повтора 3D.");
-  };
-
-  disable3d(): void {
-    this.renderMode = "2d";
-    if (this.glCanvas) this.glCanvas.removeEventListener("webglcontextlost", this.onGlContextLost);
-    this.gl3d?.dispose();
-    this.gl3d = null;
-    this.glCanvas?.remove();
-    this.glCanvas = null;
-    this.bgCanvas?.remove();
-    this.bgCanvas = null;
-    this.bgCtx = null;
-  }
+  disable3d(): void { this.glLayer.disable(); }
 
   /**
    * Шов рендер-бэкендов: экранные пиксели (clientX/clientY) → мировые координаты.
@@ -3586,7 +3499,7 @@ export class Game {
    * Вызовы (прицел, путевые точки, skin-test) от ветки не зависят.
    */
   screenToWorld(px: number, py: number): { x: number; y: number } {
-    if (this.renderMode === "3d" && this.gl3d) return this.gl3d.screenToGround(px, py);
+    if (this.renderMode === "3d" && this.glLayer.gl3d) return this.glLayer.gl3d.screenToGround(px, py);
     return {
       x: this.camX + (px - window.innerWidth / 2) / this.ppu,
       y: this.camY - (py - window.innerHeight / 2) / this.ppu,
@@ -4327,13 +4240,13 @@ export class Game {
       disable: () => this.disable3d(),
       state: () => ({
         mode: this.renderMode,
-        ...(this.gl3d ? this.gl3d.info() : { sprites: 0, drawCalls: 0, tris: 0 }),
+        ...(this.glLayer.gl3d ? this.glLayer.gl3d.info() : { sprites: 0, drawCalls: 0, tris: 0 }),
       }),
       s2w: (px: number, py: number) => this.screenToWorld(px, py),
       // 12b: перспективная проекция мир→экран (round-trip с s2w проверяет оба шва)
       project: (wx: number, wy: number) =>
-        this.gl3d ? this.gl3d.project(wx, wy) : { x: 0, y: 0 },
-      bodies: () => this.gl3d?.bodiesDbg() ?? [],
+        this.glLayer.gl3d ? this.glLayer.gl3d.project(wx, wy) : { x: 0, y: 0 },
+      bodies: () => this.glLayer.gl3d?.bodiesDbg() ?? [],
       view: () => ({ camX: this.camX, camY: this.camY, camSx: this.camSx, camSy: this.camSy, ppu: this.ppu }),
     };
   }
