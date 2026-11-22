@@ -163,6 +163,28 @@ try {
   await worldSeen;
   check("leave + world(online=1) после выхода B", true);
 
+  // фильтрация по системе: C в системе "other" НЕ получает state игрока A (sys "sol"),
+  // а клиент без своего sys (обратная совместимость) получает всё
+  const c = await api("POST", "/api/register", { username: "Charlie", password: "secret123" });
+  const C = await connectWs(c.token);
+  await C.wait((m) => m.t === "welcome");
+  C.send({ t: "state", x: 0, y: 0, a: 0, sys: "other" }); // C объявляет свою систему
+  await sleep(150); // даём примениться
+  C.inbox.length = 0;
+  B2: {
+    const B2 = await connectWs(b.token); // без sys — должен получать всё
+    await B2.wait((m) => m.t === "welcome");
+    await sleep(120); // выходим из окна троттлинга A
+    A.send({ t: "state", x: 55, y: 55, a: 0, sys: "sol" });
+    await B2.wait((m) => m.t === "state" && m.x === 55);
+    await sleep(150);
+    check("state по системе: C (other) не получил, клиент без sys получил",
+      !C.inbox.some((m) => m.t === "state" && m.x === 55));
+    B2.close();
+  }
+  C.close();
+  await sleep(100);
+
   A.close();
 } catch (e) {
   failed = true;

@@ -106,6 +106,20 @@ export function createWorld(dataDir, ledger) {
     }
   }
 
+  /**
+   * Ретрансляция state только игрокам той же системы (убирает O(N²) шум при росте онлайна).
+   * Игроки без state/sys (старые клиенты, тесты) получают всё — обратная совместимость.
+   */
+  function broadcastState(msg, exceptId, sys) {
+    const text = JSON.stringify(msg);
+    for (const p of players.values()) {
+      if (p.id === exceptId || !p.conn.alive) continue;
+      const pSys = p.state?.sys;
+      if (sys && pSys && pSys !== sys) continue;
+      p.conn.send(text);
+    }
+  }
+
   function broadcastWorld() {
     broadcast({ t: "world", world: publicWorld() });
   }
@@ -343,7 +357,7 @@ export function createWorld(dataDir, ledger) {
       } else if (typeof s.hp === "number") {
         player.estHp = s.hp; // свежая правда о собственном здоровье
       }
-      broadcast({ t: "state", id: conn.id, ...s }, conn.id);
+      broadcastState({ t: "state", id: conn.id, ...s }, conn.id, s.sys || null);
     };
 
     conn.onClose = () => {

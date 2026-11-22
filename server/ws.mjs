@@ -8,6 +8,9 @@ import { createHash, randomUUID } from "node:crypto";
 
 const WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const MAX_PAYLOAD = 64 * 1024;
+/** Суммарный лимит накопленных фрагментов одного сообщения (анти-DoS: без него
+ *  поток continuation-кадров без FIN раздувает память сервера). */
+const MAX_MESSAGE_SIZE = 256 * 1024;
 const PING_INTERVAL_MS = 30_000;
 const PONG_TIMEOUT_MS = 60_000;
 
@@ -41,6 +44,7 @@ export class WsConnection {
     this.socket = socket;
     this.buffer = Buffer.alloc(0);
     this.fragments = []; // накопленные кадры фрагментированного сообщения
+    this.fragmentBytes = 0;
     this.fragmentOpcode = 0;
     this.alive = true;
     this.lastPong = Date.now();
@@ -104,6 +108,9 @@ export class WsConnection {
     const fin = (b[0] & 0x80) !== 0;
     const opcode = b[0] & 0x0f;
     const masked = (b[1] & 0x80) !== 0;
+    // RFC 6455 §5.1: клиент ОБЯЗАН маскировать кадры. Немаскированное —
+    // отклоняем: так держится синхронизация потока с прокси/IDS.
+    if (!masked) return this.#protocolError();
     let len = b[1] & 0x7f;
     let offset = 2;
     if (len === 126) {
@@ -148,10 +155,13 @@ export class WsConnection {
       if (opcode === 0x1 && this.fragments.length > 0) return this.#protocolError();
       if (opcode === 0x0 && this.fragments.length === 0) return this.#protocolError();
       this.fragments.push(payload);
+      this.fragmentBytes = (this.fragmentBytes || 0) + payload.length;
+      if (this.fragmentBytes > MAX_MESSAGE_SIZE) return this.#protocolError();
       if (!fin) return;
+      this.fragmentBytes = 0;
       const full = Buffer.concat(this.fragments);
       this.fragments = [];
-      if (full.length > MAX_PAYLOAD) return this.#protocolError();
+      if (full.length > MAX_MESSAGE_SIZE) return this.#protocolError();
       try {
         this.onMessage?.(full.toString("utf8"));
       } catch {

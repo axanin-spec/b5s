@@ -60,9 +60,11 @@ export function createLedger(dataDir) {
       // догон журналом за снапшотом
       try {
         for (const line of (await readFile(journalFile, "utf8")).split("\n").filter(Boolean)) {
-          const e = JSON.parse(line);
-          if (e.seq > lastSeq) apply(e);
-          byId.set(e.id, e);
+          try { // одна битая строка не должна ронять replay остатка журнала
+            const e = JSON.parse(line);
+            if (e.seq > lastSeq) apply(e);
+            byId.set(e.id, e);
+          } catch {}
         }
       } catch {}
       return;
@@ -71,10 +73,12 @@ export function createLedger(dataDir) {
     let replayed = false;
     try {
       for (const line of (await readFile(journalFile, "utf8")).split("\n").filter(Boolean)) {
-        const e = JSON.parse(line);
-        apply(e);
-        byId.set(e.id, e);
-        replayed = true;
+        try {
+          const e = JSON.parse(line);
+          apply(e);
+          byId.set(e.id, e);
+          replayed = true;
+        } catch {}
       }
     } catch {}
     if (replayed) return;
@@ -214,10 +218,15 @@ export function createLedger(dataDir) {
 
   function historyFor(username, limit = 50) {
     const acc = `player:${username}`;
-    return [...byId.values()]
-      .filter((e) => e.from === acc || e.to === acc)
-      .sort((a, b) => b.seq - a.seq)
-      .slice(0, Math.min(limit, 200));
+    const cap = Math.min(limit, 200);
+    // Map хранит insertion order (≈ порядок seq) — идём с конца и выходим, набрав limit
+    const all = [...byId.values()];
+    const out = [];
+    for (let i = all.length - 1; i >= 0 && out.length < cap; i--) {
+      const e = all[i];
+      if (e.from === acc || e.to === acc) out.push(e);
+    }
+    return out;
   }
 
   return { load, transact, systemTopup, executeTrade, publicBalances, historyFor, balanceOf };

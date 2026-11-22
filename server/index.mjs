@@ -84,16 +84,17 @@ function verifyPassword(password, salt, hash) {
   return candidate.length === expected.length && timingSafeEqual(candidate, expected);
 }
 
+/** Токенов на пользователя не больше TOKENS_PER_USER — файл не разрастается от перелогинов. */
+const TOKENS_PER_USER = 5;
+
 async function issueToken(username) {
   const token = randomBytes(24).toString("hex");
-  await updateJson(TOKENS_FILE, {}, (tokens) => ({ ...tokens, [token]: username }));
+  await updateJson(TOKENS_FILE, {}, (tokens) => {
+    const kept = Object.entries(tokens).filter(([, u]) => u !== username);
+    const mine = Object.entries(tokens).filter(([, u]) => u === username).slice(-(TOKENS_PER_USER - 1));
+    return { ...Object.fromEntries(kept), ...Object.fromEntries(mine), [token]: username };
+  });
   return token;
-}
-
-async function usernameTaken(username) {
-  const users = await readJson(USERS_FILE, {});
-  const lower = username.toLowerCase();
-  return Object.keys(users).some((u) => u.toLowerCase() === lower);
 }
 
 async function findUser(username) {
@@ -163,6 +164,28 @@ function isPlausibleSave(save) {
 
 const startedAt = Date.now();
 
+/** Rate-limit на auth (scrypt дорогой — флуд login/register вешает CPU):
+ *  не более AUTH_RATE_MAX попыток в минуту с одного IP. */
+const AUTH_RATE_MAX = 20;
+const AUTH_RATE_WINDOW_MS = 60_000;
+const authAttempts = new Map(); // ip -> { count, resetAt }
+
+function authRateLimited(req) {
+  const ip = req.socket.remoteAddress || "?";
+  const now = Date.now();
+  let rec = authAttempts.get(ip);
+  if (!rec || rec.resetAt < now) {
+    rec = { count: 0, resetAt: now + AUTH_RATE_WINDOW_MS };
+    authAttempts.set(ip, rec);
+  }
+  rec.count++;
+  // уборка, чтобы карта не росла от перебора адресов
+  if (authAttempts.size > 10_000) {
+    for (const [k, v] of authAttempts) if (v.resetAt < now) authAttempts.delete(k);
+  }
+  return rec.count > AUTH_RATE_MAX;
+}
+
 async function route(req, res) {
   const url = new URL(req.url, "http://localhost");
   const method = req.method;
@@ -172,13 +195,24 @@ async function route(req, res) {
     return ok(res, { uptime: Math.round((Date.now() - startedAt) / 1000) });
   }
 
+  if (method === "POST" && (url.pathname === "/api/register" || url.pathname === "/api/login") && authRateLimited(req)) {
+    return fail(res, 429, "rate_limited");
+  }
+
   if (method === "POST" && url.pathname === "/api/register") {
     const { username, password } = await readBody(req);
     if (typeof username !== "string" || !USERNAME_RE.test(username)) return fail(res, 400, "bad_username");
     if (typeof password !== "string" || password.length < 6) return fail(res, 400, "bad_password");
-    if (await usernameTaken(username)) return fail(res, 409, "username_taken");
     const { salt, hash } = hashPassword(password);
-    await updateJson(USERS_FILE, {}, (users) => ({ ...users, [username]: { salt, hash, createdAt: Date.now() } }));
+    // уникальность проверяется ВНУТРИ сериализованной очереди файла — гонки нет
+    let created = false;
+    await updateJson(USERS_FILE, {}, (users) => {
+      const lower = username.toLowerCase();
+      if (Object.keys(users).some((u) => u.toLowerCase() === lower)) return users;
+      created = true;
+      return { ...users, [username]: { salt, hash, createdAt: Date.now() } };
+    });
+    if (!created) return fail(res, 409, "username_taken");
     // Этап 15: регистрация подпитывает общие пулы (+1 000 000 ₡ пропорционально) — общий шард.
     await world.onRegistration();
     // 15c: та же эмиссия — в денежный журнал (ledger — авторитет по пулам).
