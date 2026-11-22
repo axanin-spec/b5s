@@ -59,7 +59,8 @@ async function newPilot(browser, name) {
   // регистрация
   await page.fill(".login-input", name);
   await page.fill('input[type="password"]', "secret123");
-  await page.click("button.btn-ghost"); // «Регистрация»
+  // «Регистрация»: точный матч по тексту (кнопок btn-ghost стало несколько — языки, «забыли пароль»)
+  await page.click('button:text-matches("^(Register|Регистрация)$", "i")');
   try {
     await page.waitForSelector("#game-canvas", { timeout: 10000 });
   } catch (e) {

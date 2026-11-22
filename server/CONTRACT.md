@@ -22,21 +22,50 @@ Zero-dep Node (>= 18), CommonJS-free ESM, порт по умолчанию `8787
 → `{ ok: true, uptime: number }`
 
 ### `POST /api/register`
-Тело: `{ username: string, password: string }`
+Тело: `{ username: string, password: string, email?: string }`
 - username: 3–24 символа `[\p{L}\p{N}_-]` (кириллица разрешена), уникален без учёта регистра.
 - password: ≥ 6 символов.
-→ `{ ok: true, token, username }`
-Побочный эффект: `data/world.json.registered += 1` — счётчик зарегистрированных
-игроков для экономического решения «+1 000 000 ₡ в пулы за игрока» (Этап 15, world-state).
-Ошибки: `username_taken`, `bad_username`, `bad_password`.
+- email: обязателен, когда почта включена (`MAIL_TRANSPORT=smtp|log`); уникален без учёта регистра.
+
+Режим с почтой (16c): → `{ ok: true, needVerification: true, username }` — токен НЕ
+выдаётся, пулы не подпитываются; на email уходит 6-значный код (15 минут, ≤5 попыток).
+Активация — `POST /api/verify`. Legacy-режим (`MAIL_TRANSPORT=off`): →
+`{ ok: true, token, username }` сразу.
+Побочный эффект (после активации): `data/world.json.registered += 1` — счётчик
+зарегистрированных игроков для решения «+1 000 000 ₡ в пулы за игрока» (Этап 15).
+Ошибки: `username_taken`, `email_taken`, `bad_username`, `bad_password`, `bad_email`,
+`mail_failed`.
+
+### `POST /api/verify` (16c)
+Тело: `{ username, code }` → `{ ok: true, token, username }` — почта подтверждена,
+пулы подпитаны (+1M ₡), выдан токен.
+Ошибки: `bad_code`, `code_expired`, `too_many_attempts`.
+
+### `POST /api/verify-resend` (16c)
+Тело: `{ username }` → `{ ok: true }` всегда (ответ не раскрывает состояние аккаунта).
+
+### `POST /api/reset-request` (16c)
+Тело: `{ email }` → `{ ok: true }` всегда (нет enumeration); если email привязан —
+на него уходит код сброса.
+
+### `POST /api/reset-confirm` (16c)
+Тело: `{ email, code, password }` → `{ ok: true, token, username }`; все прежние
+токены пользователя отзываются.
+Ошибки: `bad_code`, `code_expired`, `too_many_attempts`, `bad_password`.
 
 ### `POST /api/login`
 Тело: `{ username, password }` → `{ ok: true, token, username }`
-Ошибка: `bad_credentials`.
+Ошибки: `bad_credentials`; `email_not_verified` — почтовый аккаунт без подтверждения
+(пройти `verify`).
 
-Rate-limit на auth: `/api/register` + `/api/login` суммарно — 20 попыток/мин с одного
-IP, сверх того → HTTP 429 `{ error: "rate_limited" }`. Токенов на пользователя
-одновременно ≤ 5 (выдача нового удаляет самые старые).
+Rate-limit на auth: `/api/register`, `/api/login`, `/api/verify`,
+`/api/verify-resend`, `/api/reset-request`, `/api/reset-confirm` суммарно —
+20 попыток/мин с одного IP, сверх того → HTTP 429 `{ error: "rate_limited" }`.
+Токенов на пользователя одновременно ≤ 5 (выдача нового удаляет самые старые).
+
+Почта (16c): env `MAIL_TRANSPORT` = `off` (дефолт, legacy) | `log` (коды в
+`data/outbox.log` — разработка/тесты) | `smtp` (`SMTP_HOST`/`SMTP_PORT`,
+дефолт 127.0.0.1:25; `MAIL_FROM`, дефолт noreply@b5s.ru).
 
 ### `GET /api/me` (Bearer)
 → `{ ok: true, username }` — проверка токена.

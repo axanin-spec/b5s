@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { handleUpgrade } from "./ws.mjs";
 import { createWorld, POOL_TOPUP_PER_PLAYER } from "./world.mjs";
 import { createLedger } from "./ledger.mjs";
+import { mailEnabled, sendCode } from "./mail.mjs";
 
 const PORT = Number(process.env.PORT) || 8787;
 const DATA_DIR = process.env.DATA_DIR || path.join(path.dirname(fileURLToPath(import.meta.url)), "data");
@@ -73,6 +74,12 @@ const world = createWorld(DATA_DIR, ledger);
 // ---------- auth ----------
 
 const USERNAME_RE = /^[\p{L}\p{N}_-]{3,24}$/u;
+const EMAIL_RE = /^[^\s@]{1,64}@[^\s@]{1,60}\.[^\s@]{2,24}$/;
+
+/** Код подтверждения: 6 цифр, 15 минут, ≤5 попыток ввода. */
+const CODE_TTL_MS = 15 * 60_000;
+const CODE_MAX_ATTEMPTS = 5;
+const newCode = () => String(Math.floor(100000 + Math.random() * 900000));
 
 function hashPassword(password, salt = randomBytes(16).toString("hex")) {
   return { salt, hash: scryptSync(password, salt, 32).toString("hex") };
@@ -102,6 +109,22 @@ async function findUser(username) {
   const lower = username.toLowerCase();
   const key = Object.keys(users).find((u) => u.toLowerCase() === lower);
   return key ? { username: key, ...users[key] } : null;
+}
+
+async function findUserByEmail(email) {
+  const users = await readJson(USERS_FILE, {});
+  const lower = email.toLowerCase();
+  const key = Object.keys(users).find((u) => (users[u].email || "").toLowerCase() === lower);
+  return key ? { username: key, ...users[key] } : null;
+}
+
+/** Проверка кода из pending: "ok" | "bad_code" | "code_expired" | "too_many_attempts". */
+function checkCode(user, kind, code) {
+  const p = user.pending;
+  if (!p || p.kind !== kind || typeof p.code !== "string") return "bad_code";
+  if (p.exp < Date.now()) return "code_expired";
+  if ((p.attempts || 0) >= CODE_MAX_ATTEMPTS) return "too_many_attempts";
+  return p.code === code ? "ok" : "bad_code";
 }
 
 async function authUser(req) {
@@ -195,29 +218,168 @@ async function route(req, res) {
     return ok(res, { uptime: Math.round((Date.now() - startedAt) / 1000) });
   }
 
-  if (method === "POST" && (url.pathname === "/api/register" || url.pathname === "/api/login") && authRateLimited(req)) {
+  const AUTH_PATHS = new Set([
+    "/api/register",
+    "/api/login",
+    "/api/verify",
+    "/api/verify-resend",
+    "/api/reset-request",
+    "/api/reset-confirm",
+  ]);
+  if (method === "POST" && AUTH_PATHS.has(url.pathname) && authRateLimited(req)) {
     return fail(res, 429, "rate_limited");
   }
 
   if (method === "POST" && url.pathname === "/api/register") {
-    const { username, password } = await readBody(req);
+    const { username, password, email } = await readBody(req);
     if (typeof username !== "string" || !USERNAME_RE.test(username)) return fail(res, 400, "bad_username");
     if (typeof password !== "string" || password.length < 6) return fail(res, 400, "bad_password");
+    // 16c: при включённой почте email обязателен, регистрация завершается кодом с почты
+    const mail = mailEnabled();
+    if (mail && (typeof email !== "string" || !EMAIL_RE.test(email))) return fail(res, 400, "bad_email");
+    const code = newCode();
     const { salt, hash } = hashPassword(password);
-    // уникальность проверяется ВНУТРИ сериализованной очереди файла — гонки нет
+    // уникальность (имя + email) проверяется ВНУТРИ сериализованной очереди файла — гонки нет
     let created = false;
+    let emailTaken = false;
     await updateJson(USERS_FILE, {}, (users) => {
       const lower = username.toLowerCase();
       if (Object.keys(users).some((u) => u.toLowerCase() === lower)) return users;
+      if (mail && Object.values(users).some((u) => (u.email || "").toLowerCase() === email.toLowerCase())) {
+        emailTaken = true;
+        return users;
+      }
       created = true;
-      return { ...users, [username]: { salt, hash, createdAt: Date.now() } };
+      const record = { salt, hash, createdAt: Date.now() };
+      if (mail) {
+        record.email = email;
+        record.emailVerified = false;
+        record.pending = { kind: "verify", code, exp: Date.now() + CODE_TTL_MS, attempts: 0 };
+      } else if (typeof email === "string" && EMAIL_RE.test(email)) {
+        record.email = email;
+        record.emailVerified = true; // почта выключена — подтверждать нечем
+      }
+      return { ...users, [username]: record };
     });
-    if (!created) return fail(res, 409, "username_taken");
+    if (!created) return fail(res, emailTaken ? 409 : 409, emailTaken ? "email_taken" : "username_taken");
+    if (mail) {
+      try {
+        await sendCode(DATA_DIR, { to: email, code, kind: "verify", username });
+      } catch (e) {
+        console.error("[mail] send failed:", e.message);
+        return fail(res, 502, "mail_failed");
+      }
+      // пулы и токен — только ПОСЛЕ подтверждения почты (/api/verify): иначе
+      // фейковые регистрации фармили бы +1M ₡ в общие пулы
+      return ok(res, { needVerification: true, username });
+    }
+    // legacy-путь (MAIL_TRANSPORT=off): токен сразу, пулы при регистрации
+    await world.onRegistration();
+    await ledger.systemTopup(POOL_TOPUP_PER_PLAYER, `register:${username}`);
+    return ok(res, { token: await issueToken(username), username });
+  }
+
+  // 16c: подтверждение почты кодом → аккаунт активируется, пулы подпитываются
+  if (method === "POST" && url.pathname === "/api/verify") {
+    const { username, code } = await readBody(req);
+    const user = typeof username === "string" ? await findUser(username) : null;
+    if (!user || typeof code !== "string") return fail(res, 400, "bad_code");
+    if (user.emailVerified) return ok(res, { token: await issueToken(user.username), username: user.username });
+    const verdict = checkCode(user, "verify", code);
+    if (verdict !== "ok") {
+      if (verdict === "bad_code") {
+        await updateJson(USERS_FILE, {}, (users) => {
+          const u = users[user.username];
+          if (u?.pending) u.pending.attempts = (u.pending.attempts || 0) + 1;
+          return users;
+        });
+      }
+      return fail(res, 400, verdict);
+    }
+    await updateJson(USERS_FILE, {}, (users) => {
+      const u = users[user.username];
+      if (u) {
+        u.emailVerified = true;
+        delete u.pending;
+      }
+      return users;
+    });
     // Этап 15: регистрация подпитывает общие пулы (+1 000 000 ₡ пропорционально) — общий шард.
     await world.onRegistration();
     // 15c: та же эмиссия — в денежный журнал (ledger — авторитет по пулам).
-    await ledger.systemTopup(POOL_TOPUP_PER_PLAYER, `register:${username}`);
-    return ok(res, { token: await issueToken(username), username });
+    await ledger.systemTopup(POOL_TOPUP_PER_PLAYER, `register:${user.username}`);
+    return ok(res, { token: await issueToken(user.username), username: user.username });
+  }
+
+  // 16c: повторная отправка кода подтверждения (своего, нечужого — ответ всегда ok)
+  if (method === "POST" && url.pathname === "/api/verify-resend") {
+    const { username } = await readBody(req);
+    const user = typeof username === "string" ? await findUser(username) : null;
+    if (user && !user.emailVerified && user.email && mailEnabled()) {
+      const code = newCode();
+      await updateJson(USERS_FILE, {}, (users) => {
+        const u = users[user.username];
+        if (u) u.pending = { kind: "verify", code, exp: Date.now() + CODE_TTL_MS, attempts: 0 };
+        return users;
+      });
+      sendCode(DATA_DIR, { to: user.email, code, kind: "verify", username: user.username }).catch((e) =>
+        console.error("[mail] resend failed:", e.message),
+      );
+    }
+    return ok(res, {});
+  }
+
+  // 16c: сброс пароля по почте. Ответ всегда ok — не раскрываем наличие email.
+  if (method === "POST" && url.pathname === "/api/reset-request") {
+    const { email } = await readBody(req);
+    if (typeof email !== "string" || !EMAIL_RE.test(email)) return fail(res, 400, "bad_email");
+    const user = await findUserByEmail(email);
+    if (user && mailEnabled()) {
+      const code = newCode();
+      await updateJson(USERS_FILE, {}, (users) => {
+        const u = users[user.username];
+        if (u) u.pending = { kind: "reset", code, exp: Date.now() + CODE_TTL_MS, attempts: 0 };
+        return users;
+      });
+      sendCode(DATA_DIR, { to: user.email, code, kind: "reset", username: user.username }).catch((e) =>
+        console.error("[mail] reset send failed:", e.message),
+      );
+    }
+    return ok(res, {});
+  }
+
+  if (method === "POST" && url.pathname === "/api/reset-confirm") {
+    const { email, code, password } = await readBody(req);
+    if (typeof email !== "string" || typeof code !== "string") return fail(res, 400, "bad_code");
+    if (typeof password !== "string" || password.length < 6) return fail(res, 400, "bad_password");
+    const user = await findUserByEmail(email);
+    if (!user) return fail(res, 400, "bad_code"); // без перебора: ответ одинаков
+    const verdict = checkCode(user, "reset", code);
+    if (verdict !== "ok") {
+      if (verdict === "bad_code") {
+        await updateJson(USERS_FILE, {}, (users) => {
+          const u = users[user.username];
+          if (u?.pending) u.pending.attempts = (u.pending.attempts || 0) + 1;
+          return users;
+        });
+      }
+      return fail(res, 400, verdict);
+    }
+    const { salt, hash } = hashPassword(password);
+    await updateJson(USERS_FILE, {}, (users) => {
+      const u = users[user.username];
+      if (u) {
+        u.salt = salt;
+        u.hash = hash;
+        delete u.pending;
+      }
+      return users;
+    });
+    // все старые токены отзываем — вдруг пароль увели
+    await updateJson(TOKENS_FILE, {}, (tokens) =>
+      Object.fromEntries(Object.entries(tokens).filter(([, u]) => u !== user.username)),
+    );
+    return ok(res, { token: await issueToken(user.username), username: user.username });
   }
 
   if (method === "POST" && url.pathname === "/api/login") {
@@ -226,6 +388,8 @@ async function route(req, res) {
     if (!user || typeof password !== "string" || !verifyPassword(password, user.salt, user.hash)) {
       return fail(res, 401, "bad_credentials");
     }
+    // 16c: почтовый аккаунт без подтверждения не пускаем (legacy-аккаунты без email — пускаем)
+    if (mailEnabled() && user.email && !user.emailVerified) return fail(res, 403, "email_not_verified");
     return ok(res, { token: await issueToken(user.username), username: user.username });
   }
 
@@ -327,4 +491,7 @@ server.on("upgrade", (req, socket) => {
 
 server.listen(PORT, () => {
   console.log(`[rangers-server] listening on http://localhost:${PORT} (data: ${DATA_DIR})`);
+  if (!mailEnabled()) {
+    console.warn("[rangers-server] ВНИМАНИЕ: MAIL_TRANSPORT=off — регистрация без подтверждения почты (legacy-режим)");
+  }
 });

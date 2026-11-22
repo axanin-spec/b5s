@@ -60,8 +60,40 @@ export function logout(): void {
   localStorage.removeItem(AUTH_KEY);
 }
 
-export async function register(username: string, password: string): Promise<Session> {
-  const s = await call<Session>("POST", "/api/register", { username, password });
+export async function register(
+  username: string,
+  password: string,
+  email?: string,
+): Promise<{ session: Session | null; needVerification: boolean; username: string }> {
+  const r = await call<
+    { token?: string; username: string; needVerification?: boolean }
+  >("POST", "/api/register", { username, password, ...(email ? { email } : {}) });
+  if (r.needVerification) return { session: null, needVerification: true, username: r.username };
+  const s = { token: r.token!, username: r.username };
+  saveSession(s);
+  return { session: s, needVerification: false, username: r.username };
+}
+
+/** Подтверждение почты кодом → сессия (Этап 16c). */
+export async function verifyEmail(username: string, code: string): Promise<Session> {
+  const s = await call<Session>("POST", "/api/verify", { username, code });
+  saveSession(s);
+  return s;
+}
+
+/** Повторная отправка кода подтверждения. */
+export async function resendCode(username: string): Promise<void> {
+  await call("POST", "/api/verify-resend", { username });
+}
+
+/** Запрос кода сброса пароля на email (ответ сервера всегда ok). */
+export async function resetRequest(email: string): Promise<void> {
+  await call("POST", "/api/reset-request", { email });
+}
+
+/** Смена пароля по коду с почты → новая сессия (старые токены отозваны). */
+export async function resetConfirm(email: string, code: string, password: string): Promise<Session> {
+  const s = await call<Session>("POST", "/api/reset-confirm", { email, code, password });
   saveSession(s);
   return s;
 }
