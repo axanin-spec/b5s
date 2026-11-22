@@ -43,7 +43,9 @@
     "preboss": "npm run build:test",
     "boss": "node scripts/boss-test.mjs",
     "prepvp": "npm run build:test",
-    "pvp": "node scripts/pvp-test.mjs"
+    "pvp": "node scripts/pvp-test.mjs",
+    "prebase": "npm run build:test",
+    "base": "node scripts/base-test.mjs"
   },
   "dependencies": {
     "react": "^19.2.0",

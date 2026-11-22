@@ -120,6 +120,19 @@ export interface StationSnapshot {
   active: { kind: string; title: string; desc: string; reward: number; done: number; need: number; timeLeft: number; legacy?: boolean } | null;
   /** Верфь и лавка снаряжения (Этап 7). */
   fleet: FleetSnapshot;
+  /** Домашняя база (Этап 17): склад товаров, респаун и выход из сессии. */
+  base: {
+    /** система причаливания — домашняя: прилавок склада открыт */
+    here: boolean;
+    /** эта станция — размеченная база (иначе «сделать домашней») */
+    isHome: boolean;
+    /** отображаемое имя домашней системы */
+    sysName: string;
+    /** станция может принять базу (планеты — нет) */
+    canSet: boolean;
+    /** склад: good id → тонны (без лимита трюма) */
+    cargo: Record<string, number>;
+  };
 }
 
 /** Станционное окно флота: корпуса, слоты, склад, витрина модулей. */
@@ -276,6 +289,13 @@ export interface GameApi {
   exportSave(): string | null;
   /** Import a save from a JSON file (Этап 9c); true when the file passed validation. */
   importSave(json: string): boolean;
+  /** Этап 17: причаленную станцию — в домашние базы (док, только станции). */
+  setHomeBase(): void;
+  /** Склад базы (Этап 17, док на базе): сдать товар из трюма / взять в трюм. */
+  baseStore(goodId: string, qty: number): void;
+  baseTake(goodId: string, qty: number): void;
+  /** «Завершить сессию» (Этап 17): только в доке — сейв, выход из шарда, в меню. */
+  endSession(): void;
 }
 
 export const gameApi: { current: GameApi | null } = { current: null };

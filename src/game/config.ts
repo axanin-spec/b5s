@@ -813,8 +813,10 @@ export const SAVE_KEY = "savegame";
 /**
  * v9 (Этап 10a): market intel — last-seen dock prices. Unlike v7→v8, v8 saves are
  * still accepted: they simply load with an empty intel log (save.ts backfills it).
+ * v10 (Этап 17): игровая база — поле base {sys, st?, cargo}; v8/v9 грузятся с
+ * дефолтом (Эйдолон, пустой склад).
  */
-export const SAVE_VERSION = 9;
+export const SAVE_VERSION = 10;
 export const AUTOSAVE_INTERVAL = 30;
 
 /* ------------------------------------------------------------------ */

@@ -6,7 +6,7 @@
  *  1. исходящий state несёт hp/maxHp (серверная оценка боёв);
  *  2. трассер игрока, попавший в чужой корабль, порождает worldNet.sendHit;
  *  3. входящий hit по мне уходит в борт (щит гасит);
- *  4. kill мной — строка в фиде; kill по мне — стандартный death-flow;
+ *  4. kill мной — строка в фиде; kill по мне — воскрешение на базе (Этап 17);
  *  5. trade_done переносит товары и двигает кредиты на обеих ролях;
  *  6. мир жив после всех процедур, ошибок страницы нет.
  *
@@ -121,14 +121,19 @@ const incoming = await page.evaluate(() => {
   return { shield: before.shield, hp: before.hp };
 });
 
-// 4) kill мной → фид; kill по мне → gameover
+// 4) kill мной → фид; kill по мне → смерть не конец: респаун на базе, корпус — «Рейнджер» (Этап 17)
 const feed = await page.evaluate(() => {
   window.__sim.fakeCombat({ t: "kill", id: "p1", by: "self-test" });
   return window.__uiBridge.getSnapshot().feed.map((f) => f.text);
 });
 const death = await page.evaluate(() => {
   window.__sim.fakeCombat({ t: "kill", id: "self-test", by: "p1", dmg: 0 });
-  return window.__uiBridge.getSnapshot().screen;
+  return {
+    screen: window.__uiBridge.getSnapshot().screen,
+    end: window.__uiBridge.getSnapshot().end,
+    hull: window.__sim.ship().ship,
+    base: window.__sim.base().sysNow,
+  };
 });
 
 // 5) сделки: я — инициатор (плачу ₡, получаю товар), я — принимающий (плачу ₡, догружаюсь)
@@ -161,7 +166,7 @@ const ok = {
   okOutHits: Array.isArray(hits) && hits.length >= 1 && hits.every((h) => h[0] === "p1" && h[1] > 0),
   okIncoming: incoming.shield === 1e6 - 50 && incoming.hp === 1e9,
   okKillFeed: feed.some((t) => t.includes("Вы уничтожили") && t.includes("Соперник")),
-  okDeathFlow: death === "gameover",
+  okDeathFlow: death.screen === "playing" && death.end === null && death.hull === "fighter" && death.base === "eidolon",
   okTradeFrom: trade.from.credits === 5000 && trade.from.cargo.food === 3,
   okTradeTo: trade.to.credits === 4500 && trade.to.cargo.food === 5,
   okTradeAlien: trade.alien.credits === 4500 && trade.alien.cargo.food === 5,

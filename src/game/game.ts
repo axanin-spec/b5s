@@ -239,6 +239,13 @@ export class Game {
   traderTiers: Record<string, { tier: number; trips: number }> = {};
 
   /**
+   * Домашняя база (Этап 17): точка респауна после гибели и безлимитный склад
+   * товаров. sys — система, st — id станции в ней (null → первая станция),
+   * cargo — склад (good id → тонны, трюмных лимитов нет). Сейв v10.
+   */
+  base: { sys: string; st: string | null; cargo: Record<string, number> } = { sys: SYSTEMS[0].id, st: null, cargo: {} };
+
+  /**
    * Сводки караванов (Этап 14b): индекс рейдера → секунды актуальности метки.
    * Тактическая память, не сейвится: загрузился — начал обход заново.
    */
@@ -1026,7 +1033,9 @@ export class Game {
     }
 
     if (idx === 0) {
-      this.gameOver();
+      // Этап 17: смерть ≠ поражение — спасательный транспорт уносит борт на
+      // домашнюю базу; груз остаётся у обломков, корпус и модулы сгорают
+      this.respawnAtBase();
       return;
     }
 
@@ -1576,6 +1585,7 @@ export class Game {
     this.traderTiers = {}; // 14а: a fresh campaign has no veteran caravans yet
     this.pirateMarks.clear(); // 14b: сводки — тактическая память, у неё нет сейва
     this.guildLedger = { duezed: 0, calls: 0, reports: 0 };
+    this.base = { sys: SYSTEMS[0].id, st: null, cargo: {} }; // 17: у нового капитана база — Эйдолон
     this.waypoint = null;
     this.raid = null;
     this.grabTarget = null; this.grabT = 0;
@@ -1639,6 +1649,10 @@ export class Game {
     this.traderTiers = save.traders ? { ...save.traders } : {};
     this.pirateMarks.clear(); // 14b: сводки караванов после загрузки обнуляются
     this.guildLedger = { duezed: 0, calls: 0, reports: 0 };
+    // 17: база и склад переживают перезагрузку; сейвы до v10 стартуют с Эйдолоном и пустым складом
+    this.base = save.base && SYSTEMS.some((s) => s.id === save.base!.sys)
+      ? { sys: save.base.sys, st: typeof save.base.st === "string" ? save.base.st : null, cargo: { ...save.base.cargo } }
+      : { sys: SYSTEMS[0].id, st: null, cargo: {} };
     this.waypoint = null;
     // the ops desk keeps the raid across a reload (guards re-form on arrival, see spawnInitialPopulation)
     this.raid = save.raid
@@ -1680,7 +1694,10 @@ export class Game {
     const save: SaveGame = {
       v: SAVE_VERSION,
       seed: this.seed,
-      system: this.systemDef.id,      player: {
+      system: this.systemDef.id,
+      // 17: база и её склад — часть живого прогресса (v10)
+      base: { sys: this.base.sys, st: this.base.st ?? undefined, cargo: { ...this.base.cargo } },
+      player: {
         x: Math.round(p.x), y: Math.round(p.y),
         credits: Math.round(this.player.credits),
         hull: Math.round(p.hp), shield: Math.round(p.shield),
@@ -1795,14 +1812,108 @@ export class Game {
     };
   }
 
-  private gameOver(): void {
+  /**
+   * Гибель борта (Этап 17): катапультирование на домашнюю базу вместо gameover.
+   * Штрафы: трюм — поддонами у обломков (TTL 10 мин, как дроп каравана; если
+   * база в другой системе, груз сгорает с бортом), корпус — стартовый
+   * «Рейнджер», установленные модули теряются. Кошелёк, склад базы, stash и
+   * ledger остаются при капитане. Респаун — на назначенной станции (или на
+   * первой станции системы базы) с прыжковой неуязвимостью.
+   */
+  private respawnAtBase(): void {
     const p = this.ships[0];
-    this.explosion(p.x, p.y, 60, 520, 6);
-    p.active = false;
     this.audio.sfx("lose");
     this.audio.setThreat(0);
-    uiBridge.set({ end: this.endStats(false, "Ваш корабль уничтожен."), station: null });
-    this.sm.transition("gameover");
+    const stay = this.base.sys === this.systemDef.id;
+    if (stay) {
+      // трюм уходит за борт у обломков — до трёх поддонов, как у потопленного каравана
+      let pods = 0;
+      for (const g of GOODS) {
+        const q = Math.round(this.player.cargo[g.id] ?? 0);
+        if (q <= 0 || pods >= 3) continue;
+        pods++;
+        this.spawnPickup("cargo", g.id, q, p.x + (this.rnd() - 0.5) * 160, p.y + (this.rnd() - 0.5) * 160);
+      }
+    } else {
+      if (this.contract) this.failContract("борт потерян в чужой системе");
+      this.clearEntities(); // новый мир — старые борта и обломки за спиной
+    }
+    this.player.cargo = {};
+    // корпус и установленные модули сгорели с бортом — склад-stash и кошелёк целы
+    this.player.ship = "fighter";
+    this.player.installed = {
+      weapon: [...STARTER_KIT.weapon], shield: [...STARTER_KIT.shield], engine: [...STARTER_KIT.engine],
+    };
+    if (!stay) this.enterSystem(this.base.sys);
+    const st =
+      this.dockables.find((d) => d.isStation && d.id === this.base.st) ??
+      this.dockables.find((d) => d.isStation)!;
+    const a = st.angle;
+    this.resetPlayerShip(st.x + Math.cos(a) * (st.radius + 700), st.y + Math.sin(a) * (st.radius + 700));
+    this.rebuildPlayerTex();
+    if (!stay) {
+      this.spawnInitialPopulation();
+      if (this.hereOccupied() && this.occ.flagshipBuilt && this.bossIdx < 0) this.spawnBossResident();
+    }
+    this.camX = this.ships[0].x; this.camY = this.ships[0].y;
+    this.jumpGrace = GATE_CFG.JUMP_GRACE;
+    this.audio.sfx("dock"); // стыковка спасательного транспорта
+    this.setNews(
+      stay
+        ? `Катапультирование: транспорт поднял вас у «${st.name}». Корпус и установленные модули потеряны, груз в поддонах у обломков — десять минут.`
+        : `Катапультирование: транспорт доставил вас на базу «${st.name}» (${this.systemName(this.base.sys)}). Корпус, модули и трюм потеряны с бортом.`,
+    );
+    this.saveNow(); // живой прогресс продолжается с базы
+    this.pushHud();
+  }
+
+  /** Этап 17: назначить причаленную станцию домашней базой (док, только станции). */
+  setHomeBase(): void {
+    const d = this.dockTarget;
+    if (this.sm.state !== "docked" || !d || !d.isStation) return;
+    if (this.base.sys === this.systemDef.id && this.base.st === d.id) return;
+    this.base.sys = this.systemDef.id;
+    this.base.st = d.id;
+    this.saveNow();
+    this.setNews(`Домашняя база: «${d.name}» (${this.systemDef.name}). Здесь склад, респаун и «завершить сессию».`);
+    this.pushStation();
+  }
+
+  /** Склад базы (Этап 17, док на базе): сдать товар из трюма — склад безлимитен. */
+  baseStore(goodId: string, qty: number): void {
+    if (this.sm.state !== "docked" || this.systemDef.id !== this.base.sys) return;
+    const have = this.player.cargo[goodId] ?? 0;
+    const q = Math.min(Math.max(0, Math.round(qty)), have);
+    if (q <= 0) return;
+    const left = have - q;
+    if (left > 0) this.player.cargo[goodId] = left; else delete this.player.cargo[goodId];
+    this.base.cargo[goodId] = (this.base.cargo[goodId] ?? 0) + q;
+    this.audio.sfx("trade");
+    this.saveNow();
+    this.pushStation();
+    this.pushHud();
+  }
+
+  /** Склад базы (Этап 17, док на базе): взять товар в трюм — по свободному месту. */
+  baseTake(goodId: string, qty: number): void {
+    if (this.sm.state !== "docked" || this.systemDef.id !== this.base.sys) return;
+    const stored = this.base.cargo[goodId] ?? 0;
+    const free = this.cargoMax() - this.cargoUsed();
+    const q = Math.min(stored, Math.max(0, Math.round(qty)), free);
+    if (q <= 0) {
+      if (stored > 0 && free <= 0) {
+        this.audio.sfx("alarm");
+        this.setNews("Склад: трюм забит — некуда класть.");
+      }
+      return;
+    }
+    const left = stored - q;
+    if (left > 0) this.base.cargo[goodId] = left; else delete this.base.cargo[goodId];
+    this.player.cargo[goodId] = (this.player.cargo[goodId] ?? 0) + q;
+    this.audio.sfx("pickup");
+    this.saveNow();
+    this.pushStation();
+    this.pushHud();
   }
 
   private victory(reason: string): void {
@@ -3377,7 +3488,15 @@ export class Game {
         timeLeft: Math.max(0, Math.ceil(this.contract.timeLeft)),
         legacy: this.contract.legacy,
       } : null,
+      // 17: склад открыт только на домашней базе; перенести базу можно, причалив к любой станции
       fleet: this.fleetSnapshot(d),
+      base: {
+        here: this.systemDef.id === this.base.sys,
+        isHome: this.base.st === d.id,
+        sysName: this.systemName(this.base.sys),
+        canSet: d.isStation,
+        cargo: { ...this.base.cargo },
+      },
     };
     uiBridge.set({ station });
   }
@@ -3560,6 +3679,20 @@ export class Game {
       startRaid: (id) => this.startRaid(id),
       exportSave: () => this.exportSave(),
       importSave: (json) => this.importSave(json),
+      // 17: база — назначение, склад, выход из сессии
+      setHomeBase: () => this.setHomeBase(),
+      baseStore: (g, q) => this.baseStore(g, q),
+      baseTake: (g, q) => this.baseTake(g, q),
+      endSession: () => {
+        // «Завершить сессию»: только в доке — сейв, борт уходит из шарда, выход в меню
+        if (this.sm.state !== "docked") return;
+        this.undock(); // машина состояний: из дока легален только выход в полёт
+        worldNet.disconnect();
+        this.saveNow();
+        this.sm.transition("title");
+        uiBridge.set({ station: null, end: null });
+        this.pushStatic();
+      },
     };
     gameApi.current = api;
     // debug bridges (Этап 9b): only in `vite dev` or the test build (--mode test, .env.test).
@@ -3758,6 +3891,9 @@ export class Game {
       },
       // «развыиграть»: вернуть мир в до-победный режим (после случайной победы в 13b-тестах)
       unwin: () => { this.player.victoryShown = false; return this.player.victoryShown; },
+      // 17 (base-test зонд): вид базы + гибель по щелчку (тот же путь, что залп NPC)
+      base: () => ({ sys: this.base.sys, st: this.base.st, cargo: { ...this.base.cargo }, sysNow: this.systemDef.id }),
+      dieNow: () => { this.killShip(0, false); return this.sm.state; },
       poolAmt: (id: string) => Math.round(this.pools[id as PoolId] ?? 0),
       // инвариант ₡ цел: drain/gain и pay/pay — те же траектории денег, что в игре
       drainPool: (id: string) => this.gain(this.pools[id as PoolId], id as PoolId),

@@ -702,6 +702,7 @@ kbd {
   border-top: 1px solid var(--panel-border);
   display: flex;
   justify-content: center;
+  gap: 10px;
 }
 
 /* ============================ mobile ============================ */

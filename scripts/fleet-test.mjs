@@ -341,7 +341,7 @@ const okTradeBark = trade.bark.ship === "bark" && trade.bark.hp === 560 && trade
 const okTradeFit = trade.fits.wasp === true && trade.fits.needle === false
   && trade.waspOn === true && trade.needleRejected === true;
 
-// ── 5. сейв v9: фит, кредиты и delta через перезагрузку ──
+// ── 5. сейв v10: фит, кредиты и delta через перезагрузку ──
 const saved = await page.evaluate(() => {
   window.__gameApi.current.saveNow();
   const raw = localStorage.getItem("game.savegame");
@@ -357,7 +357,7 @@ const restored = await page.evaluate(() => {
 const sameFleet = (x, y) => x.ship === y.ship
   && JSON.stringify(x.installed) === JSON.stringify(y.installed)
   && JSON.stringify(x.stash) === JSON.stringify(y.stash);
-const okSave = !!saved.sv && saved.sv.v === 9 && sameFleet(saved.sv.player, saved.s)
+const okSave = !!saved.sv && saved.sv.v === 10 && sameFleet(saved.sv.player, saved.s)
   && sameFleet(restored.s, saved.s) && restored.a.delta === saved.a.delta && restored.a.player === saved.a.player;
 
 await done({

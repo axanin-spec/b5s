@@ -3,7 +3,7 @@
  * Проверяет:
  *  1. стыковка записывает снимок цен станции (совпадает с терминалом, все товары);
  *  2. вторая станция добавляется в журнал, повторная стыковка обновляет время снимка;
- *  3. сейв v9 несёт разведку в localStorage (докинг автосохраняет);
+ *  3. сейв v10 несёт разведку в localStorage (докинг автосохраняет);
  *  4. на карте вкладка «Система» → «Рынки»: посещённые со ценами, прочие «нет данных»;
  *  5. 14с: контрабанда (табак/специя/наркотики) торгуется везде — в союзном доку
  *     покупка проходит из-под прилавка (бейдж «сходняк», деньги в клановую кассу,
@@ -103,10 +103,10 @@ const upd = await dockAndFly(st0); // перестыковка: снимок п�
 const okSecond = two.ids.includes(st1) && two.ids.includes(st0);
 const okRefresh = upd.ids.length === 2 && upd.t > t1;
 
-// ── 3. сейв v9 в localStorage (докинг автосохраняет) ──
+// ── 3. сейв v10 в localStorage (докинг автосохраняет) ──
 const saved = await page.evaluate(() => JSON.parse(localStorage.getItem("game.savegame")));
 // 13c: ключ разведки — «система:док» (id станций повторяются в каждой системе)
-const okSave = saved?.v === 9 && !!saved.intel?.[`eidolon:${st0}`] && !!saved.intel?.[`eidolon:${st1}`]
+const okSave = saved?.v === 10 && !!saved.intel?.[`eidolon:${st0}`] && !!saved.intel?.[`eidolon:${st1}`]
   && GOOD_IDS.every((g) => saved.intel[`eidolon:${st0}`].prices[g]);
 
 // ── 4. UI: вкладка «Система» → сворачиваемый блок «Рынки» ──

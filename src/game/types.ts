@@ -315,8 +315,10 @@ export interface SaveGame {
   v: number;
   seed: number;
   system: string;
-  /** Этап 17: домашняя база игрока (склад + точка респауна/выхода в офлайн). Опционально для v8/v9. */
-  base?: { sys: string; cargo: Record<string, number> };
+  /** Этап 17: домашняя база игрока (склад + точка респауна/выхода в офлайн). Опционально для v8/v9.
+   *  st — id станции внутри системы (аддитивно, сервер и валидатор пропускают лишние поля);
+   *  без него респаун — на первую станцию системы. */
+  base?: { sys: string; st?: string; cargo: Record<string, number> };
   player: {
     x: number; y: number;
     credits: number;

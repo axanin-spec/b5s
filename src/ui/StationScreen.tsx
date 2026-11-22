@@ -19,7 +19,7 @@ function mmss(sec: number): string {
 
 const KIND_NAMES: Record<string, string> = { hunt: 'Охота', transport: 'Доставка', escort: 'Эскорт', bounty: 'Головы' }
 
-type Tab = 'trade' | 'yard' | 'gear' | 'repair' | 'contracts' | 'bank'
+type Tab = 'trade' | 'yard' | 'gear' | 'repair' | 'contracts' | 'bank' | 'base'
 
 const CAT_NAMES: Record<string, string> = { weapon: 'Орудия', shield: 'Щиты', engine: 'Двигатели' }
 
@@ -153,6 +153,7 @@ export function StationScreen({ s }: { s: StationSnapshot }) {
           <button className={`tab ${tab === 'gear' ? 'active' : ''}`} onClick={() => setTab('gear')}>Снаряжение</button>
           <button className={`tab ${tab === 'repair' ? 'active' : ''}`} onClick={() => setTab('repair')}>Ремонт</button>
           <button className={`tab ${tab === 'bank' ? 'active' : ''}`} onClick={() => setTab('bank')}>Касса</button>
+          <button className={`tab ${tab === 'base' ? 'active' : ''}`} onClick={() => setTab('base')}>База</button>
         </nav>
 
         <div className="station-body">
@@ -421,11 +422,76 @@ export function StationScreen({ s }: { s: StationSnapshot }) {
           )}
 
           {tab === 'bank' && <BankTab s={s} />}
+
+          {tab === 'base' && (
+            <div className="base-wrap">
+              <div className="rep-title">
+                Домашняя система: {s.base.sysName}
+                {s.base.isHome && <span className="black-badge">ЭТА СТАНЦИЯ — БАЗА</span>}
+              </div>
+              {s.base.here ? (
+                <div className="trade-table">
+                  <div className="trade-row trade-head">
+                    <span>Товар</span><span>На складе</span><span>В трюме</span><span>Сделка</span>
+                  </div>
+                  {GOODS.map((g) => {
+                    const stored = s.base.cargo[g.id] ?? 0
+                    const have = s.cargo[g.id] ?? 0
+                    return (
+                      <div className="trade-row" key={g.id}>
+                        <span className="trade-good">
+                          <GoodIcon id={g.id} /><b className="trade-name">{g.name}</b>
+                        </span>
+                        <span className="trade-have"><b>{stored}</b></span>
+                        <span className="trade-have">{have}</span>
+                        <span className="trade-actions">
+                          <button className="mini-btn" disabled={have < 1} onClick={() => api()?.baseStore(g.id, 1)}>сдать 1</button>
+                          <button className="mini-btn" disabled={have < 1} onClick={() => api()?.baseStore(g.id, 10)}>сдать 10</button>
+                          <button className="mini-btn" disabled={have < 1} onClick={() => api()?.baseStore(g.id, 99999)}>всё</button>
+                          <button className="mini-btn sell" disabled={stored < 1} onClick={() => api()?.baseTake(g.id, 1)}>взять 1</button>
+                          <button className="mini-btn sell" disabled={stored < 1} onClick={() => api()?.baseTake(g.id, 10)}>взять 10</button>
+                          <button className="mini-btn sell" disabled={stored < 1} onClick={() => api()?.baseTake(g.id, 99999)}>макс</button>
+                        </span>
+                      </div>
+                    )
+                  })}
+                  <div className="trade-note">
+                    Склад безлимитен: тонны просто переезжают между трюмом и ангаром — денег не стоят.
+                    После гибели борта спасательный транспорт вернёт вас на базу, склад не пострадает.
+                  </div>
+                </div>
+              ) : (
+                <div className="trade-note">
+                  Это не ваша база: склад открыт только в системе {s.base.sysName}.
+                  {s.base.canSet ? ' Или сделайте домашней эту станцию.' : ''}
+                </div>
+              )}
+              <div className="fine-panel">
+                {s.base.canSet && !s.base.isHome && (
+                  <button className="btn btn-small btn-primary" onClick={() => api()?.setHomeBase()}>
+                    Сделать эту станцию домашней базой
+                  </button>
+                )}
+                <div className="trade-note">
+                  Гибель борта: корпус → стартовый «Рейнджер», установленные модули теряются,
+                  трюм остаётся поддонами у обломков на десять минут. Кошелёк, банковский счёт,
+                  склад модулей и склад базы — целы.
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         <footer className="station-footer">
           <button className="btn btn-primary" onClick={() => api()?.undock()}>
             Покинуть станцию <kbd>Esc</kbd>
+          </button>
+          <button
+            className="btn"
+            title="Сейв пишется, борт уходит из шарда, выход в меню"
+            onClick={() => api()?.endSession()}
+          >
+            Завершить сессию
           </button>
         </footer>
       </div>
