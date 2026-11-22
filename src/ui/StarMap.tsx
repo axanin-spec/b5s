@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CLAN_ONLY_GOODS, GOODS } from '@/game/config'
 import { gameApi, type MapSnapshot } from '@/game/uiBridge'
 
@@ -54,9 +54,34 @@ export function StarMap({ map }: { map: MapSnapshot }) {
   const [hint, setHint] = useState<string | null>(null)
   /** Этап 10a: «Рынки» on the system tab — collapsed until asked for. */
   const [mkOpen, setMkOpen] = useState(false)
+  /** Этап 13c: выбранный товар галактической сводки — где купить/где продать. */
+  const [xfGood, setXfGood] = useState<string | null>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const mapRef = useRef(map)
   mapRef.current = map
+
+  // 13c: сводка по всем разведанным станциям галактики. Свежие снимки имеют
+  // приоритет; из одних устаревших тоже считаем, но панель это помечает.
+  const xf = useMemo(() => {
+    if (!xfGood) return null
+    const rows = map.intel
+      .filter((it) => it.prices[xfGood])
+      .map((it) => ({
+        dockableId: it.dockableId, name: it.name, systemId: it.systemId,
+        buy: it.prices[xfGood].buy, sell: it.prices[xfGood].sell,
+        stale: map.now - it.t > 600,
+      }))
+      .sort((a, b) => a.buy - b.buy)
+    const fresh = rows.filter((r) => !r.stale)
+    const pool = fresh.length ? fresh : rows
+    if (!pool.length) return { rows, buy: null, sell: null, allStale: false }
+    let buy = pool[0], sell = pool[0]
+    for (const r of pool) { if (r.buy < buy.buy) buy = r; if (r.sell > sell.sell) sell = r }
+    return { rows, buy, sell, allStale: !fresh.length }
+  }, [xfGood, map])
+  const xfRef = useRef<typeof xf>(null)
+  xfRef.current = xf
+  const sysName = (id: string) => map.systems.find((s) => s.id === id)?.name ?? id
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current
@@ -116,6 +141,40 @@ export function StarMap({ map }: { map: MapSnapshot }) {
         ctx.font = '9px system-ui'
         ctx.fillStyle = 'rgba(143,169,182,0.9)'
         ctx.fillText(s.profile, x, y + 46)
+      }
+      // 13c: сводка выбранного товара — метки «купить/продать» на узлах и
+      // пунктирная стрелка от выгодной закупки к выгодной продаже
+      const xfv = xfRef.current
+      if (xfv?.buy && xfv.sell) {
+        const bp = GAL_POS[xfv.buy.systemId], sp = GAL_POS[xfv.sell.systemId]
+        if (bp && sp) {
+          if (xfv.buy.systemId !== xfv.sell.systemId) {
+            const ax = bp[0] * S, ay = bp[1] * S, bx = sp[0] * S, by = sp[1] * S
+            const dx = bx - ax, dy = by - ay, dl = Math.hypot(dx, dy) || 1
+            const ux = dx / dl, uy = dy / dl
+            const ex = bx - ux * 28, ey = by - uy * 28
+            ctx.strokeStyle = 'rgba(255,181,74,0.5)'
+            ctx.lineWidth = 1.5
+            ctx.setLineDash([6, 5])
+            ctx.beginPath(); ctx.moveTo(ax + ux * 26, ay + uy * 26); ctx.lineTo(ex, ey); ctx.stroke()
+            ctx.setLineDash([])
+            const ang = Math.atan2(dy, dx)
+            ctx.fillStyle = 'rgba(255,181,74,0.85)'
+            ctx.beginPath()
+            ctx.moveTo(ex + Math.cos(ang) * 9, ey + Math.sin(ang) * 9)
+            ctx.lineTo(ex + Math.cos(ang + 2.5) * 7, ey + Math.sin(ang + 2.5) * 7)
+            ctx.lineTo(ex + Math.cos(ang - 2.5) * 7, ey + Math.sin(ang - 2.5) * 7)
+            ctx.closePath(); ctx.fill()
+          }
+          ctx.font = 'bold 10px system-ui'
+          ctx.textAlign = 'center'
+          ctx.shadowBlur = 6
+          ctx.shadowColor = '#54ffd2'; ctx.fillStyle = '#54ffd2'
+          ctx.fillText(`купить ₡${xfv.buy.buy}`, bp[0] * S, bp[1] * S - 30)
+          ctx.shadowColor = '#ffb54a'; ctx.fillStyle = '#ffb54a'
+          ctx.fillText(`продать ₡${xfv.sell.sell}`, sp[0] * S, sp[1] * S + 60)
+          ctx.shadowBlur = 0
+        }
       }
       return
     }
@@ -271,6 +330,23 @@ export function StarMap({ map }: { map: MapSnapshot }) {
         onPointerDown={onCanvasClick}
       />
 
+      {/* 13c: выбор товара для галактической сводки — только на «Галактике» */}
+      {tab === 'galaxy' && (
+        <div className="sm-goods" aria-label="Сводка цен по товарам">
+          {GOODS.map((g) => (
+            <button
+              key={g.id}
+              data-good={g.id}
+              className={`sm-goods-btn ${xfGood === g.id ? 'on' : ''}`}
+              title={CLAN_ONLY_GOODS.includes(g.id) ? `${g.name} — контрабанда, клановые цены` : `Где покупать и продавать: ${g.name}`}
+              onClick={() => setXfGood((v) => (v === g.id ? null : g.id))}
+            >
+              {g.name}
+            </button>
+          ))}
+        </div>
+      )}
+
       {tab === 'system' && (
         <div className="sm-views">
           {map.systems.map((s) => (
@@ -401,9 +477,55 @@ export function StarMap({ map }: { map: MapSnapshot }) {
         </button>
       </div>
 
+      {/* 13c: сводка «где купить / где продать» по разведанным станциям */}
+      {tab === 'galaxy' && xfGood && xf && (
+        <div className="sm-xf">
+          {xf.buy && xf.sell ? (
+            <>
+              <div className="sm-xf-route">
+                <span className="b">▲ {xf.buy.name} · {sysName(xf.buy.systemId)} — закупка ₡{xf.buy.buy}</span>
+                <span className="s">▼ {xf.sell.name} · {sysName(xf.sell.systemId)} — продажа ₡{xf.sell.sell}</span>
+                <span className={`m ${xf.sell.sell > xf.buy.buy ? 'up' : ''}`}>
+                  {xf.sell.sell > xf.buy.buy ? `разница ₡${xf.sell.sell - xf.buy.buy}/шт` : 'разницы нет — везти невыгодно'}
+                </span>
+              </div>
+              {xf.allStale && <div className="sm-xf-warn">последние замеры устарели — обновите разведку доками</div>}
+              <table className="sm-xf-table">
+                <thead>
+                  <tr><th className="n">Станция</th><th>Система</th><th>покупка</th><th>продажа</th></tr>
+                </thead>
+                <tbody>
+                  {xf.rows.map((r) => (
+                    <tr
+                      key={r.dockableId}
+                      className={r.dockableId === xf.buy?.dockableId && r.dockableId === xf.sell?.dockableId ? 'buy sell'
+                        : r.dockableId === xf.buy?.dockableId ? 'buy'
+                          : r.dockableId === xf.sell?.dockableId ? 'sell'
+                            : r.stale ? 'stale' : undefined}
+                    >
+                      <td className="n">{r.name}</td>
+                      <td>{sysName(r.systemId)}</td>
+                      <td className="b">{r.buy}</td>
+                      <td className="s">{r.sell}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {xf.buy.systemId !== map.currentId && (
+                <button className="btn btn-small" onClick={() => gameApi.current?.setWaypoint('gate', xf.buy!.systemId)}>
+                  ⤳ Курс к закупке: {sysName(xf.buy.systemId)}
+                </button>
+              )}
+            </>
+          ) : (
+            <div className="sm-xf-warn">этот товар не видел ни один ваш док — стыкуйтесь, цены появятся здесь</div>
+          )}
+        </div>
+      )}
+
       <div className="sm-hint">
         {tab === 'galaxy'
-          ? 'Клик по узлу — сводка и налёт. Красный — оккупирован.'
+          ? 'Клик по узлу — сводка и налёт. Красный — оккупирован. Товар ниже — где покупать и продавать.'
           : viewId === map.currentId
             ? hint ?? 'Клик по станции, планете или вратам — проложить курс.'
             : 'Чужая система — схема для планирования прыжка.'}

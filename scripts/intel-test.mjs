@@ -8,6 +8,8 @@
  *  5. 14с: контрабанда (табак/специя/наркотики) торгуется везде — в союзном доку
  *     покупка проходит из-под прилавка (бейдж «сходняк», деньги в клановую кассу,
  *     станция и патруль не при чём), в Логово — открыто; сейв несёт clan-флаги;
+ *  5b. 13c: вкладка «Галактика» — чип товара, панель «где купить/где продать»
+ *     по всем разведанным станциям, курс к закупке через врата, повторный клик — свернуть;
  *  6. сейв v8 без intel загружается и даёт пустую разведку (обратная совместимость).
  *
  * Использование: npm run intel   (pre-хук сам соберёт build:test)
@@ -103,8 +105,9 @@ const okRefresh = upd.ids.length === 2 && upd.t > t1;
 
 // ── 3. сейв v9 в localStorage (докинг автосохраняет) ──
 const saved = await page.evaluate(() => JSON.parse(localStorage.getItem("game.savegame")));
-const okSave = saved?.v === 9 && !!saved.intel?.[st0] && !!saved.intel?.[st1]
-  && GOOD_IDS.every((g) => saved.intel[st0].prices[g]);
+// 13c: ключ разведки — «система:док» (id станций повторяются в каждой системе)
+const okSave = saved?.v === 9 && !!saved.intel?.[`eidolon:${st0}`] && !!saved.intel?.[`eidolon:${st1}`]
+  && GOOD_IDS.every((g) => saved.intel[`eidolon:${st0}`].prices[g]);
 
 // ── 4. UI: вкладка «Система» → сворачиваемый блок «Рынки» ──
 await page.locator(".starmap-tabs .tab").nth(1).click();
@@ -175,12 +178,66 @@ const lairTrade = await page.evaluate(() => {
 await page.waitForTimeout(200);
 const lairFlags = await page.evaluate(() => {
   const s = JSON.parse(localStorage.getItem("game.savegame"));
-  return { lair: s.intel?.lair?.clan, eidolon: s.intel?.[Object.keys(s.intel).find((k) => s.intel[k].systemId === "eidolon") ?? "" ]?.clan };
+  return { lair: s.intel?.["terminus:lair"]?.clan, eidolon: s.intel?.[Object.keys(s.intel).find((k) => s.intel[k].systemId === "eidolon") ?? "" ]?.clan };
 });
 const okLairFree = lairTrade.id === "lair" && lairTrade.clanMarket === true
   && lairTrade.drugs === 4 && lairTrade.spice === 4
   && lairFlags.lair === true && lairFlags.eidolon === false;
 await page.evaluate(() => window.__gameApi.current.undock());
+
+// ── 5b. 13c: галактическая сводка цен на вкладке «Галактика» ──
+// Собираем разведку ещё в двух системах (Кронос дорогой, Никс дешёвый) —
+// панель и канвас должны указать самую дешёвую закупку и самую дорогую продажу.
+const kronosDock = await page.evaluate(() => { window.__sim.jump("kronos"); return window.__sim.stations()[0].id })
+const okKronosDock = await page.evaluate((id) => { const r = window.__sim.dockAt(id); window.__gameApi.current.undock(); return r }, kronosDock)
+const nixDock = await page.evaluate(() => { window.__sim.jump("nix"); return window.__sim.stations()[0].id })
+const okNixDock = await page.evaluate((id) => { const r = window.__sim.dockAt(id); window.__gameApi.current.undock(); return r }, nixDock)
+// внимание: closeMap не обнуляет поле map в снимке — открытость смотрим по mapOpen
+await page.evaluate(() => { if (!window.__uiBridge.getSnapshot().mapOpen) window.__gameApi.current.toggleMap() })
+await page.waitForTimeout(300)
+// ожидание зонда считаем прямо из снимка — без знания системных множителей
+const xfExp = await page.evaluate(() => {
+  const m = window.__uiBridge.getSnapshot().map
+  const rows = m.intel.map((i) => ({ name: i.name, systemId: i.systemId, buy: i.prices.food.buy, sell: i.prices.food.sell }))
+  let buy = rows[0], sell = rows[0]
+  for (const r of rows) { if (r.buy < buy.buy) buy = r; if (r.sell > sell.sell) sell = r }
+  return { buy, sell, cur: m.currentId, n: rows.length }
+})
+await page.locator('.sm-goods-btn[data-good="food"]').click()
+await page.waitForTimeout(350)
+const xfTxt = await page.locator(".sm-xf").innerText().catch(() => "")
+// 5 станций разведаны (Эйдолон×2, Логово, Кронос, Никс) — без межсистемных коллизий ключей
+const okXfPanel = okKronosDock && okNixDock && xfExp.n >= 5
+  && xfTxt.includes(xfExp.buy.name) && xfTxt.includes(String(xfExp.buy.buy))
+  && xfTxt.includes(xfExp.sell.name) && xfTxt.includes(String(xfExp.sell.sell))
+  && /разница ₡\d+\/шт/.test(xfTxt)
+await page.screenshot({ path: join(ROOT, "verification-shots", "galaxy-prices.png") })
+// курс к закупке: если выгодный док не в нашей системе — путевая точка на врата
+let okXfRoute = true
+if (xfExp.buy.systemId !== xfExp.cur) {
+  await page.locator(".sm-xf .btn").click()
+  await page.waitForTimeout(250)
+  okXfRoute = await page.evaluate(() => !!window.__uiBridge.getSnapshot().map.waypoint)
+}
+// повторный клик по чипу — сводка складывается
+await page.locator('.sm-goods-btn[data-good="food"]').click()
+await page.waitForTimeout(250)
+const okXfToggle = (await page.locator(".sm-xf").count()) === 0
+
+// ── 5c. 13c: миграция старой разведки — голый ключ «station-0» → «система:док» ──
+const mig = await page.evaluate(() => {
+  window.__gameApi.current.closeMap();
+  const s = JSON.parse(localStorage.getItem("game.savegame"));
+  const e = JSON.parse(JSON.stringify(s.intel["eidolon:station-0"]));
+  s.intel = { "station-0": e }; // до-13c формат: ключ без системы, система только в записи
+  localStorage.setItem("game.savegame", JSON.stringify(s));
+  window.__gameApi.current.continueGame();
+  window.__gameApi.current.toggleMap();
+  const m = window.__uiBridge.getSnapshot().map;
+  window.__gameApi.current.closeMap();
+  return { n: m.intel.length, one: m.intel[0] ?? null };
+});
+const okMigrate = mig.n === 1 && mig.one?.systemId === "eidolon" && mig.one?.dockableId === "station-0";
 
 // ── 6. сейв v8 без intel: грузится, разведка пуста ──
 const v8 = await page.evaluate(() => {
@@ -195,8 +252,8 @@ const v8 = await page.evaluate(() => {
 });
 const okV8 = v8.playing === true && v8.intel === 0;
 
-const ok = { okRecord, okSecond, okRefresh, okSave, okUi, okAllianceStreet, okLairFree, okV8, noPageErrors: pageErrors.length === 0 };
-console.log(JSON.stringify({ ok, seen: { st0, st1 }, snap: { count: snap0.count, t: e0?.t, now: snap0.now }, upd, allianceStreet, lairTrade, lairFlags, v8, pageErrors: pageErrors.slice(0, 3) }, null, 1));
+const ok = { okRecord, okSecond, okRefresh, okSave, okUi, okAllianceStreet, okLairFree, okXfPanel, okXfRoute, okXfToggle, okMigrate, okV8, noPageErrors: pageErrors.length === 0 };
+console.log(JSON.stringify({ ok, seen: { st0, st1 }, snap: { count: snap0.count, t: e0?.t, now: snap0.now }, upd, allianceStreet, lairTrade, lairFlags, xfExp, xfTxt: xfTxt.slice(0, 260), mig, v8, pageErrors: pageErrors.slice(0, 3) }, null, 1));
 await browser.close();
 server.close();
 process.exit(Object.values(ok).every(Boolean) ? 0 : 1);

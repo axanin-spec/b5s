@@ -1840,8 +1840,17 @@ export class Game {
       t: save.occupation.t, flagshipBuilt: save.occupation.flagshipBuilt,
     };
     this.pools = save.pools ? { ...save.pools } : { ...POOLS };
-    // 10a: the intel log survives the reload; validateSave already backfilled a v8 save with {}
-    this.marketIntel = save.intel ? { ...save.intel } : {};
+    // 10a: the intel log survives the reload; validateSave already backfilled a v8 save with {}.
+    // 13c: ключ записи — «система:док»; старые сейвы с голым «station-0» мигрируем
+    // на месте (система записи известна), коллизии прошлых эпох складываются в одну
+    this.marketIntel = {};
+    if (save.intel) {
+      for (const [k, e] of Object.entries(save.intel)) {
+        const key = k.includes(":") ? k : `${e.systemId}:${k}`;
+        const prev = this.marketIntel[key];
+        if (!prev || e.t >= prev.t) this.marketIntel[key] = e;
+      }
+    }
     // 14а: caravan ledgers survive too — pre-14а saves start every callsign at C
     this.traderTiers = save.traders ? { ...save.traders } : {};
     this.pirateMarks.clear(); // 14b: сводки караванов после загрузки обнуляются
@@ -3660,7 +3669,9 @@ export class Game {
    * прежнее наблюдение; на карте оно стареет вместе с дрейфом цен (world.economyTick).
    */
   private recordIntel(d: Dockable): void {
-    this.marketIntel[d.id] = {
+    // 13c: ключ «система:док» — идентификаторы станций (station-0…) повторяются
+    // в каждой системе, без префикса разведка затиралась между системами
+    this.marketIntel[`${this.systemDef.id}:${d.id}`] = {
       systemId: this.systemDef.id,
       name: d.name,
       t: Math.round(this.player.playTime),
@@ -3784,8 +3795,10 @@ export class Game {
         flagshipBuilt: this.occ.flagshipBuilt, timer: Math.max(0, Math.round(this.occ.t)),
       },
       // 10a: visited stations only — the chart marks the rest «нет данных» itself
-      intel: Object.entries(this.marketIntel).map(([dockableId, e]) => ({
-        dockableId, name: e.name, systemId: e.systemId, t: e.t, prices: e.prices, clan: e.clan,
+      intel: Object.entries(this.marketIntel).map(([key, e]) => ({
+        // 13c: ключ записи «система:док»; схемам систем и панели нужен голый «док»
+        dockableId: key.slice(key.indexOf(":") + 1),
+        name: e.name, systemId: e.systemId, t: e.t, prices: e.prices, clan: e.clan,
       })),
       now: Math.round(this.player.playTime),
     };

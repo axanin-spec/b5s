@@ -1383,3 +1383,36 @@ kbd {
   letter-spacing: 0.06em;
   background: #04060d;
 }
+
+/* галактическая сводка цен (Этап 13c, трек Б): товары-чипы и таблица «где что» */
+.sm-goods { display: flex; gap: 4px; flex-wrap: wrap; padding: 6px 12px 0; }
+.sm-goods-btn {
+  font: 9px/1 ui-monospace, Consolas, monospace;
+  letter-spacing: 0.05em; text-transform: uppercase;
+  color: var(--text-dim); background: rgba(14, 28, 42, 0.6);
+  border: 1px solid var(--panel-border); border-radius: 6px;
+  padding: 5px 8px; cursor: pointer;
+}
+.sm-goods-btn:hover { color: var(--text); }
+.sm-goods-btn.on { color: var(--accent); border-color: var(--accent); text-shadow: 0 0 8px var(--accent-dim); }
+.sm-xf {
+  margin: 8px 12px 0; padding: 8px 9px;
+  border: 1px solid var(--panel-border); border-radius: 8px;
+  background: rgba(10, 22, 34, 0.55);
+}
+.sm-xf-route { display: flex; flex-direction: column; gap: 3px; font-size: 11px; margin-bottom: 6px; }
+.sm-xf-route .b { color: var(--accent); }
+.sm-xf-route .s { color: #ffb54a; }
+.sm-xf-route .m { color: var(--text-dim); }
+.sm-xf-route .m.up { color: #7fe08f; }
+.sm-xf-warn { font-size: 10px; color: #d8a24a; margin-bottom: 6px; }
+.sm-xf-table { width: 100%; border-collapse: collapse; font: 9px/1.4 ui-monospace, Consolas, monospace; margin-bottom: 6px; }
+.sm-xf-table th { padding: 2px 3px; color: var(--text-dim); font-weight: 600; text-align: right; border-bottom: 1px solid var(--panel-border); }
+.sm-xf-table th.n { text-align: left; }
+.sm-xf-table td { padding: 2px 3px; text-align: right; border-bottom: 1px solid rgba(120, 160, 190, 0.08); }
+.sm-xf-table td.n { text-align: left; color: #d9f2ec; }
+.sm-xf-table td.b { color: var(--accent); }
+.sm-xf-table td.s { color: #ffb54a; }
+.sm-xf-table tr.buy td.b { font-weight: 700; text-shadow: 0 0 8px var(--accent-dim); }
+.sm-xf-table tr.sell td.s { font-weight: 700; text-shadow: 0 0 8px rgba(255, 181, 74, 0.45); }
+.sm-xf-table tr.stale { opacity: 0.55; }
