@@ -3,7 +3,7 @@
  * Browser-local only: does not sync across devices; clearing browser data loses it.
  */
 
-import { EQUIP, GOODS, HULLS, MONEY_TOTAL, POOLS, SAVE_KEY, SAVE_VERSION, TRADER_TIERS } from "./config";
+import { EQUIP, GOODS, HULLS, MONEY_TOTAL, POOLS, SAVE_KEY, TRADER_TIERS } from "./config";
 import { storage } from "./storage";
 import type { EquipCat, SaveGame } from "./types";
 
@@ -55,9 +55,16 @@ export function loadSave(): SaveGame | null {
 export function validateSave(raw: unknown): SaveGame | null {
   if (typeof raw !== "object" || raw === null) return null;
   const s = raw as SaveGame;
-  // v9 added the market intel log (Этап 10a); v8 saves stay playable — they load with an empty one
-  if (s.v !== SAVE_VERSION && s.v !== 8) return null;
+  // v9 added the market intel log (Этап 10a); v10 — база игрока (Этап 17, поле опционально);
+  // v8/v9 saves stay playable — грузятся с дефолтами
+  if (s.v !== 8 && s.v !== 9 && s.v !== 10) return null;
   if (!isNum(s.seed) || typeof s.system !== "string" || s.system.length === 0) return null;
+  // Этап 17: база опциональна; если есть — форма строгая
+  if (s.base !== undefined && s.base !== null) {
+    const b = s.base;
+    if (typeof b !== "object" || typeof b.sys !== "string" || b.sys.length === 0) return null;
+    if (!validCargo(b.cargo)) return null;
+  }
   if (typeof s.player !== "object" || s.player === null) return null;
   const p = s.player;
   if (!isNum(p.x) || !isNum(p.y) || !isNum(p.credits) || p.credits < 0) return null;
@@ -76,6 +83,8 @@ export function validateSave(raw: unknown): SaveGame | null {
     if (c.funder !== undefined && c.funder !== "alliance" && c.funder !== "clan") return null;
     if (!isNum(c.done) || !isNum(c.need) || !isNum(c.id) || !isNum(c.qty)) return null;
     if (typeof c.title !== "string" || typeof c.destId !== "string") return null;
+    // 13e: legacy mark is optional; anything non-boolean is a broken save
+    if (c.legacy !== undefined && c.legacy !== null && typeof c.legacy !== "boolean") return null;
   }
   if (typeof s.fluct !== "object" || s.fluct === null) return null;
   if (typeof s.stats !== "object" || s.stats === null) return null;

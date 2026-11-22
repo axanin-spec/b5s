@@ -19,7 +19,7 @@ const DATA_DIR = process.env.DATA_DIR || path.join(path.dirname(fileURLToPath(im
 const SAVES_DIR = path.join(DATA_DIR, "saves");
 const MAX_BODY = 5 * 1024 * 1024;
 /** Принимаемые версии сейва (полная валидация — на клиенте, src/game/save.ts). */
-const SAVE_VERSIONS = new Set([8, 9]);
+const SAVE_VERSIONS = new Set([8, 9, 10]); // v10 — база игрока (Этап 17)
 
 // ---------- файловое хранилище с сериализацией записи ----------
 

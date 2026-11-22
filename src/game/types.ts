@@ -214,6 +214,8 @@ export interface ContractOffer {
   /** transport/escort: destination dockable id + display name. */
   destId: string;
   destName: string;
+  /** Пост-игра (13e): наследный контракт — двойная награда из казны заказчика. */
+  legacy?: boolean;
 }
 
 /** Accepted contract; escort additionally binds a spawned trader pool index. */
@@ -313,6 +315,8 @@ export interface SaveGame {
   v: number;
   seed: number;
   system: string;
+  /** Этап 17: домашняя база игрока (склад + точка респауна/выхода в офлайн). Опционально для v8/v9. */
+  base?: { sys: string; cargo: Record<string, number> };
   player: {
     x: number; y: number;
     credits: number;
@@ -337,6 +341,8 @@ export interface SaveGame {
     goodId: string; qty: number; destId: string; destName: string;
     /** optional: v7 saves written before 6b default to the Alliance board. */
     funder?: "alliance" | "clan";
+    /** optional (13e): наследный контракт победителя; старые сейвы — без поля. */
+    legacy?: boolean;
   } | null;
   /** Price fluctuation multipliers per dockable id. */
   fluct: Record<string, Record<string, number>>;
