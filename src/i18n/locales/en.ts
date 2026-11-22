@@ -61,4 +61,9 @@ export const en = {
   "title.dock": "DOCK",
   "title.jump": "JUMP",
   "title.foot": "Goals: buy out a quarter of the galaxy's economy (25% share) — or sink the three clan flagships. Losing your ship is not the end: you respawn at your home base. Progress is stored on the server — continue from any device. The galaxy is shared: other pilots are out there — trade with them or fight them.",
+
+  "pause.title": "PAUSED",
+  "pause.resume": "Resume",
+  "pause.toTitle": "Main menu",
+  "pause.note": "Progress autosaves to the server — on docking and every 30 seconds. No rollbacks: the world lives on.",
 } as const;
