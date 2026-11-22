@@ -55,6 +55,15 @@ function saveSession(s: Session): void {
 }
 
 export function logout(): void {
+  const s = getSession();
+  if (s) {
+    // отзыв токена на сервере; keepalive — запрос доживает при закрытии вкладки
+    fetch(`${API}/api/logout`, {
+      method: "POST",
+      keepalive: true,
+      headers: { Authorization: `Bearer ${s.token}` },
+    }).catch(() => {});
+  }
   flushRemote();
   attachRemote(null);
   localStorage.removeItem(AUTH_KEY);

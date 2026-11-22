@@ -14,7 +14,7 @@
  * - Пулы могут уходить в долг до -1e12 (клановая казна по правилам игры).
  */
 
-import { mkdir, readFile, rename, writeFile, appendFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile, appendFile, stat } from "node:fs/promises";
 import path from "node:path";
 
 export const POOL_NAMES = ["patrol", "alliance", "clan", "stations"];
@@ -98,6 +98,30 @@ export function createLedger(dataDir) {
   }
 
   /**
+   * Ротация журнала: снапшот балансов пишется при каждой транзакции, поэтому
+   * старые строки (≤ снапшот) для восстановления не нужны — они только растят
+   * файл. Когда журнал превышает порог — переписываем, оставляя последние
+   * KEEP записей (historyFor — вид недавних операций, этого достаточно).
+   * Порог можно переопределить env LEDGER_JOURNAL_ROTATE_BYTES (тесты).
+   */
+  const JOURNAL_ROTATE_BYTES = Number(process.env.LEDGER_JOURNAL_ROTATE_BYTES) || 8 * 1024 * 1024;
+  const JOURNAL_KEEP_ENTRIES = Number(process.env.LEDGER_JOURNAL_KEEP_ENTRIES) || 20_000;
+  const ROTATE_CHECK_EVERY = Number(process.env.LEDGER_JOURNAL_ROTATE_CHECK_EVERY) || 500;
+  let lastRotateCheckSeq = 0;
+  async function maybeRotateJournal() {
+    if (lastSeq - lastRotateCheckSeq < ROTATE_CHECK_EVERY) return; // stat не на каждую запись
+    lastRotateCheckSeq = lastSeq;
+    const st = await stat(journalFile).catch(() => null);
+    if (!st || st.size < JOURNAL_ROTATE_BYTES) return;
+    const lines = (await readFile(journalFile, "utf8")).split("\n").filter(Boolean);
+    if (lines.length <= JOURNAL_KEEP_ENTRIES) return;
+    const tmp = journalFile + ".tmp";
+    await writeFile(tmp, lines.slice(-JOURNAL_KEEP_ENTRIES).join("\n") + "\n", "utf8");
+    await rename(tmp, journalFile);
+    console.log(`[ledger] journal rotated: ${lines.length} → ${JOURNAL_KEEP_ENTRIES} entries`);
+  }
+
+  /**
    * Провести транзакцию. Возвращает { entry, dedup } либо бросает { code }.
    * actor — username из токена; kind: "tx" (свои деньги) | "grant" (пул→игрок).
    */
@@ -142,6 +166,7 @@ export function createLedger(dataDir) {
       const tmp = balancesFile + ".tmp";
       await writeFile(tmp, JSON.stringify({ seq: lastSeq, accounts: Object.fromEntries(balances) }), "utf8");
       await rename(tmp, balancesFile);
+      await maybeRotateJournal();
       return { entry, dedup: false };
     });
   }

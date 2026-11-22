@@ -399,6 +399,19 @@ async function route(req, res) {
     return ok(res, { username });
   }
 
+  // Отзыв текущего токена (выход). Идемпотентно: нет токена — просто ok.
+  if (url.pathname === "/api/logout" && method === "POST") {
+    const header = req.headers.authorization || "";
+    const token = header.startsWith("Bearer ") ? header.slice(7) : "";
+    if (token) {
+      await updateJson(TOKENS_FILE, {}, (tokens) => {
+        if (token in tokens) delete tokens[token];
+        return tokens;
+      });
+    }
+    return ok(res, {});
+  }
+
   if (method === "GET" && url.pathname === "/api/world") {
     return ok(res, { world: world.publicWorld() });
   }

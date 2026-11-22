@@ -33,6 +33,7 @@
 
 import { readFile, rename, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
+import { isTradeableId } from "./tradeable.mjs";
 
 const STATE_MIN_INTERVAL_MS = 50; // не чаще 20 Гц на игрока
 const MAX_PLAYERS = 200;
@@ -44,6 +45,8 @@ const HIT_MAX_DMG = 1000; // кап урона одного попадания
 const HIT_MAX_RANGE = 3000; // мир. единицы между последними state атакующего и цели
 const HIT_RATE_WINDOW_MS = 10_000;
 const HIT_RATE_MAX = 30; // не более 30 попаданий за 10 с на атакующего
+const OFFER_RATE_MAX = 10; // не более 10 торговых офферов в минуту на игрока
+const OFFER_RATE_WINDOW_MS = 60_000;
 const DEFAULT_HP = 100;
 const KILLS_LOG_MAX = 50;
 
@@ -164,6 +167,8 @@ export function createWorld(dataDir, ledger) {
       if (!Number.isFinite(v) || v < 0 || v > 1e6) return null;
       s[k] = Math.round(v);
     }
+    // 13e: титул победителя галактики — булево, виден всем в оверлее
+    if (msg.legend !== undefined) s.legend = !!msg.legend;
     return s;
   }
 
@@ -232,7 +237,7 @@ export function createWorld(dataDir, ledger) {
     if (keys.length > 20) return null;
     const out = {};
     for (const k of keys) {
-      if (k.length > 40) return null;
+      if (!isTradeableId(k)) return null; // whitelist: только реальные товары/модули игры
       const q = Number(g[k]);
       if (!Number.isInteger(q) || q <= 0 || q > 100000) return null;
       out[k] = q;
@@ -242,6 +247,11 @@ export function createWorld(dataDir, ledger) {
 
   function handleTradeOffer(player, msg) {
     sweepTrades();
+    // анти-спам: не более OFFER_RATE_MAX офферов в минуту
+    const now0 = Date.now();
+    player.offerTimes = player.offerTimes.filter((t) => now0 - t < OFFER_RATE_WINDOW_MS);
+    if (player.offerTimes.length >= OFFER_RATE_MAX) return;
+    player.offerTimes.push(now0);
     const id = String(msg.id || "");
     if (id.length < 8 || id.length > 80 || trades.has(id)) return;
     const target = players.get(String(msg.to || ""));
@@ -324,7 +334,7 @@ export function createWorld(dataDir, ledger) {
       conn.send(JSON.stringify({ t: "error", error: "shard_full" }));
       return conn.close();
     }
-    const player = { id: conn.id, username, conn, state: null, lastRelay: 0, dead: false, estHp: null, hitTimes: [] };
+    const player = { id: conn.id, username, conn, state: null, lastRelay: 0, dead: false, estHp: null, hitTimes: [], offerTimes: [] };
     players.set(conn.id, player);
 
     conn.send(JSON.stringify({ t: "welcome", id: conn.id, players: roster(), world: publicWorld() }));

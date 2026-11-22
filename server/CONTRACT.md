@@ -70,6 +70,9 @@ Rate-limit на auth: `/api/register`, `/api/login`, `/api/verify`,
 ### `GET /api/me` (Bearer)
 → `{ ok: true, username }` — проверка токена.
 
+### `POST /api/logout` (Bearer)
+→ `{ ok: true }` — отзывает текущий токен. Идемпотентно.
+
 ### `GET /api/save` (Bearer)
 → `{ ok: true, save: object | null, updatedAt: number | null }`
 
@@ -104,8 +107,9 @@ data/
 Лимит: 200 игроков на шард (`{ t: "error", error: "shard_full" }`).
 
 Клиент → сервер:
-- `{ t: "state", x, y, a, sys?, hull?, hp?, maxHp? }` — позиция; x/y/a конечные
-  числа (округляются до 0.01), sys/hull строки ≤ 64, hp/maxHp 0..1e6
+- `{ t: "state", x, y, a, sys?, hull?, hp?, maxHp?, legend? }` — позиция; x/y/a конечные
+  числа (округляются до 0.01), sys/hull строки ≤ 64, hp/maxHp 0..1e6,
+  legend (13e) — булево, титул победителя галактики.
   (необязательно, для PvP-оценки). Троттлинг: не чаще 20 Гц.
 - `{ t: "hit", target, dmg }` — заявка о попадании (15c). Сервер верифицирует:
   цель жива и онлайн, одна система (если оба репортят sys), дистанция по
@@ -137,7 +141,9 @@ PvP — мягкая верификация: сервер не симулиру�
 - `{ t: "trade_offer", id, to, giveCredits, wantCredits, giveGoods?, wantGoods? }`
   — оффер игроку `to`; TTL 60 с, оба должны быть онлайн, живы, в одной системе
   и на дистанции ≤ 1500. goods — объект `goodId → qty` (≤ 20 позиций, qty
-  целое 1..100000). Лимит незавершённых офферов на игрока: 10.
+  целое 1..100000); goodId — только из whitelist реальных товаров и модулей
+  игры (`server/tradeable.mjs`, дрейф ловит test-trade). Лимиты:
+  незавершённых офферов на игрока — 10; темп — ≤ 10 офферов/мин.
 - `{ t: "trade_accept" | "trade_decline", id }` — ответ адресата.
 - `{ t: "trade_cancel", id }` — отзыв инициатором.
 

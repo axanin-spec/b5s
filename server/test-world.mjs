@@ -134,6 +134,13 @@ try {
   await stateSeen;
   check("state A ретранслирован B (округление/поля)", true);
 
+  // 13e: титул победителя (legend) проходит через sanitize и доезжает до соседей
+  await sleep(120); // выходим из окна троттлинга
+  const legendSeen = B.wait((m) => m.t === "state" && m.legend === true);
+  A.send({ t: "state", x: 100, y: -40, a: 1.5, sys: "sol", legend: true });
+  await legendSeen;
+  check("legend-флаг ретранслирован (13e)", true);
+
   // троттлинг: два state подряд (10 мс) → B получает только первый
   await sleep(100); // выходим из окна троттлинга после предыдущей ретрансляции
   B.inbox.length = 0;

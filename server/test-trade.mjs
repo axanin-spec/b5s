@@ -147,6 +147,31 @@ try {
   await goneB;
   check("отключение инициатора отменяет сделку", true);
 
+  // whitelist: оффер с несуществующим id товара не доходит до адресата
+  const C = await connectWs(a.token); // Купец переподключается
+  C.id = (await C.wait((m) => m.t === "welcome")).id;
+  await near(C, 0);
+  const beforeFake = B.count((m) => m.t === "trade_offer");
+  C.send({ t: "trade_offer", id: "deal-fake", to: B.id, giveGoods: { unobtanium: 5, ore: 1 } });
+  await sleep(200);
+  check("оффер с фейковым id товара отклонён (whitelist)", B.count((m) => m.t === "trade_offer") === beforeFake);
+
+  // whitelist принимает реальные модули
+  C.send({ t: "trade_offer", id: "deal-mod", to: B.id, giveGoods: { "needle-C": 1 } });
+  const modOffer = await B.wait((m) => m.t === "trade_offer" && m.id === "deal-mod", 2000);
+  check("модуль needle-C проходит whitelist", modOffer.giveGoods["needle-C"] === 1);
+  B.send({ t: "trade_decline", id: "deal-mod" });
+  await sleep(150);
+
+  // анти-спам: 11-й оффер за минуту отклоняется
+  let delivered = 0;
+  const beforeSpam = B.count((m) => m.t === "trade_offer");
+  for (let i = 0; i < 12; i++) C.send({ t: "trade_offer", id: `spam-${i}`, to: B.id, giveCredits: 1 });
+  await sleep(300);
+  delivered = B.count((m) => m.t === "trade_offer") - beforeSpam;
+  check("антиспам: ≤10 офферов в минуту доходят, остальные режутся", delivered <= 10);
+
+  C.close();
   B.close();
 } catch (e) {
   failed = true;
@@ -158,5 +183,27 @@ try {
 }
 
 const ok = !failed && Object.values(results).every(Boolean);
-console.log(`\nTRADE ${ok ? "OK" : "FAIL"}: ${Object.values(results).filter(Boolean).length}/${Object.keys(results).length} проверок`);
-process.exit(ok ? 0 : 1);
+
+// дрейф whitelist: каждый товар/модуль из src/game/config.ts должен приниматься сервером
+try {
+  const { isTradeableId } = await import("./tradeable.mjs");
+  const { readFile } = await import("node:fs/promises");
+  const cfg = await readFile(path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "src", "game", "config.ts"), "utf8");
+  const goodsBlock = cfg.match(/export const GOODS[^]*?\];/)?.[0] || "";
+  const goodsIds = [...goodsBlock.matchAll(/id: "([a-z0-9_]+)"/g)].map((m) => m[1]);
+  const linesBlock = cfg.match(/export const EQUIP_LINES[^]*?\];/)?.[0] || "";
+  const lineNames = [...linesBlock.matchAll(/\{ id: "([a-z0-9_]+)"/g)].map((m) => m[1]);
+  const ranks = [...(cfg.match(/export const RANKS = \[([^\]]+)\]/)?.[1] || "").matchAll(/"([A-Z]+)"/g)].map((m) => m[1]);
+  const missing = [
+    ...goodsIds.filter((id) => !isTradeableId(id)),
+    ...lineNames.flatMap((l) => ranks.map((r) => `${l}-${r}`)).filter((id) => !isTradeableId(id)),
+  ];
+  check(`whitelist покрывает config.ts (товаров ${goodsIds.length}, модулей ${lineNames.length}×${ranks.length})`, goodsIds.length > 0 && missing.length === 0);
+  if (missing.length) console.log("  отсутствуют в whitelist:", missing.join(", "));
+} catch (e) {
+  check("drift-проверка whitelist", false);
+  console.error("  drift check error:", e.message);
+}
+
+console.log(`\nTRADE ${ok && Object.values(results).every(Boolean) ? "OK" : "FAIL"}: ${Object.values(results).filter(Boolean).length}/${Object.keys(results).length} проверок`);
+process.exit(ok && Object.values(results).every(Boolean) ? 0 : 1);
