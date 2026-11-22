@@ -137,9 +137,7 @@ export function tradeMod(c: EconCtx): { buy: number; sell: number } {
 export function priceMods(c: EconCtx, goodId?: string): { buy: number; sell: number } {
   const tm = tradeMod(c);
   if (clanTurf(c, c.dockTarget)) {
-    const b = c.player.rep.clan >= REP.FRIENDLY ? PIRATE_BRANCH.BLACK_FRIEND
-      : c.player.rep.clan <= REP.UNFRIENDLY ? PIRATE_BRANCH.BLACK_COLD
-      : OCCUPATION.BLACK;
+    const b = blackMods(c);
     return { buy: tm.buy * b.buy, sell: tm.sell * b.sell };
   }
   if (goodId && isClanOnlyGood(goodId)) {
@@ -148,18 +146,32 @@ export function priceMods(c: EconCtx, goodId?: string): { buy: number; sell: num
   return tm;
 }
 
+/**
+ * Раскладка чёрного рынка по клановой репутации (Этап 6): «своим» кланы
+ * продают дешевле и платят жирнее, с чужака не гонят, но и не любят.
+ * Единая таблица для докового перекоса и радио бортников (13d).
+ */
+export function blackMods(c: EconCtx): { buy: number; sell: number } {
+  return c.player.rep.clan >= REP.FRIENDLY ? PIRATE_BRANCH.BLACK_FRIEND
+    : c.player.rep.clan <= REP.UNFRIENDLY ? PIRATE_BRANCH.BLACK_COLD
+    : OCCUPATION.BLACK;
+}
+
 /* ------------------------------------------------------------------ */
-/* Радио-торговля с караванами (Этап 5b)                               */
+/* Радио-торговля: караваны (Этап 5b) и чёрный рынок в эфире (13d)     */
 /* ------------------------------------------------------------------ */
 
-/** Ближайший караван на связи; бортники не выходят в эфир Альянса (Этап 8). */
+/**
+ * Ближайшее торговое судно на связи. С 13d бортники кланов тоже в эфире —
+ * у них свой канал (клановые расценки), поэтому просто участвуют в выборе;
+ * что за борт отвечает радио — решает флаг smuggler в radioData/сделках.
+ */
 export function radioIdx(c: EconCtx): number {
   const p = c.ships[0];
   let best = -1, bestD: number = TRADER_AI.RADIO_RANGE;
   for (let i = 1; i < c.ships.length; i++) {
     const s = c.ships[i];
     if (!s.active || s.faction !== "trader") continue;
-    if (s.smuggler) continue;
     const dd = Math.hypot(s.x - p.x, s.y - p.y) - s.radius;
     if (dd <= bestD) { bestD = dd; best = i; }
   }
@@ -172,43 +184,54 @@ function traderLoad(s: Ship): number {
   return n;
 }
 
-/** Radio offer: the caravan quotes against the market it last left (Этап 5b). */
+/**
+ * Radio offer: the caravan quotes against the market it last left (Этап 5b).
+ * 13d: бортник кланов — тот же эфир, но чёрный: тройка в прилавке, расценки
+ * клановой раскладки (для «своих» — жирнее), отсчёт от кланового дока.
+ */
 export function radioData(c: RadioCtx): RadioSnapshot | null {
   const i = radioIdx(c);
   if (i < 0) return null;
   const s = c.ships[i];
+  const clan = !!s.smuggler;
+  const m = blackMods(c);
   const home = c.dockables[Math.min(Math.max(s.routeFrom, 0), c.dockables.length - 1)];
   const sells: RadioSnapshot["sells"] = [];
   const buys: RadioSnapshot["buys"] = [];
   const room = TRADER_AI.HOLD - traderLoad(s);
   for (const g of GOODS) {
     // 14g/14с: зарегистрированный караван «неучтёнку» на борт не берёт —
-    // уличный сходняк живёт вне караванного эфира
-    if (isClanOnlyGood(g.id)) continue;
+    // уличный сходняк живёт вне караванного эфира; бортник (13d) — и есть сходняк
+    if (isClanOnlyGood(g.id) && !clan) continue;
     const base = priceOf(home, g.id);
     const q = Math.round(s.cargo[g.id] ?? 0);
     if (q > 0) {
-      const unit = Math.max(1, Math.round(base * TRADER_AI.RADIO_SELL));
+      const unit = Math.max(1, Math.round(base * (clan ? m.buy : TRADER_AI.RADIO_SELL)));
       sells.push({ goodId: g.id, name: g.name, qty: q, unit });
     }
     const have = c.player.cargo[g.id] ?? 0;
     if (have > 0 && room > 0) {
-      const unit = Math.max(1, Math.round(base * TRADER_AI.RADIO_BUY));
+      const unit = Math.max(1, Math.round(base * (clan ? m.sell : TRADER_AI.RADIO_BUY)));
       const maxQty = Math.min(have, room, Math.floor(Math.max(0, s.wallet) / unit));
       if (maxQty > 0) buys.push({ goodId: g.id, name: g.name, unit, maxQty });
     }
   }
   // 14а: класс из реестра виден в шапке радио — ветеранов узнают по позывному и букве
-  return { shipIdx: i, name: s.name || "Караван", tier: s.tier, sells, buys, wallet: Math.round(s.wallet), holdFree: Math.max(0, room) };
+  return { shipIdx: i, name: s.name || (clan ? "Бортник" : "Караван"), tier: s.tier, clan: clan || undefined, sells, buys, wallet: Math.round(s.wallet), holdFree: Math.max(0, room) };
 }
 
-/** Radio purchase: credits go straight into the caravan's pocket — pools untouched (5b). */
+/**
+ * Radio purchase: credits go straight into the caravan's pocket — pools untouched (5b).
+ * Сделка с бортником (13d) — тоже мимо казн: его кошелёк и так клановый float
+ * (smugglerFloat), инвариант ₡ держится; вне биржи — тарифа нет.
+ */
 export function radioBuy(c: RadioCtx, shipIdx: number, goodId: string, qty: number): boolean {
   const s = c.ships[shipIdx];
   if (!s || !s.active || s.faction !== "trader") return false;
-  if (isClanOnlyGood(goodId)) return false; // 14g: борт каравана контрабанды не видит
+  const clan = !!s.smuggler;
+  if (isClanOnlyGood(goodId) && !clan) return false; // 14g: борт каравана контрабанды не видит
   const home = c.dockables[Math.min(Math.max(s.routeFrom, 0), c.dockables.length - 1)];
-  const unit = Math.max(1, Math.round(priceOf(home, goodId) * TRADER_AI.RADIO_SELL));
+  const unit = Math.max(1, Math.round(priceOf(home, goodId) * (clan ? blackMods(c).buy : TRADER_AI.RADIO_SELL)));
   const n = Math.max(0, Math.min(
     Math.floor(qty),
     Math.round(s.cargo[goodId] ?? 0),
@@ -228,13 +251,15 @@ export function radioBuy(c: RadioCtx, shipIdx: number, goodId: string, qty: numb
   return true;
 }
 
-/** Radio sale: the caravan pays from its wallet and stows the goods in its hold (5b). */
+/** Radio sale: the caravan pays from its wallet and stows the goods in its hold (5b);
+ *  у бортника (13d) кошелёк клановый, расценка чёрная — платит жирнее биржи. */
 export function radioSell(c: RadioCtx, shipIdx: number, goodId: string, qty: number): boolean {
   const s = c.ships[shipIdx];
   if (!s || !s.active || s.faction !== "trader") return false;
-  if (isClanOnlyGood(goodId)) return false; // 14g: борт каравана контрабанды не видит
+  const clan = !!s.smuggler;
+  if (isClanOnlyGood(goodId) && !clan) return false; // 14g: борт каравана контрабанды не видит
   const home = c.dockables[Math.min(Math.max(s.routeFrom, 0), c.dockables.length - 1)];
-  const unit = Math.max(1, Math.round(priceOf(home, goodId) * TRADER_AI.RADIO_BUY));
+  const unit = Math.max(1, Math.round(priceOf(home, goodId) * (clan ? blackMods(c).sell : TRADER_AI.RADIO_BUY)));
   const n = Math.max(0, Math.min(
     Math.floor(qty),
     c.player.cargo[goodId] ?? 0,

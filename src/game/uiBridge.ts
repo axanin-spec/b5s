@@ -149,6 +149,8 @@ export interface RadioSnapshot {
   buys: { goodId: string; name: string; unit: number; maxQty: number }[];
   wallet: number;
   holdFree: number;
+  /** 13d: на канале бортник кланов — панель оформляется как чёрный рынок. */
+  clan?: boolean;
 }
 
 export interface EndStats {

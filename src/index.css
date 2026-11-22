@@ -281,6 +281,17 @@ kbd {
 .radio-btn.sell { color: #ffcf6e; border-color: rgba(255, 210, 74, 0.5); }
 .radio-btn.sell:hover { background: rgba(255, 210, 74, 0.16); }
 .radio-empty { color: var(--text-dim); font-size: 10px; padding: 3px 0; }
+/* 13d · канал бортника — чёрный рынок: фиолет, как чип кланов и их метки */
+.radio-panel.clan { border-color: rgba(180, 106, 255, 0.55); box-shadow: 0 0 18px rgba(180, 106, 255, 0.22); }
+.radio-panel.clan .radio-head {
+  color: #d9b3ff; text-shadow: 0 0 9px rgba(180, 106, 255, 0.65);
+  border-bottom-color: rgba(180, 106, 255, 0.3);
+}
+.radio-sub { color: #b46aff; font-size: 9px; letter-spacing: 0.08em; margin: -2px 0 4px; }
+.radio-panel.clan .radio-btn { color: #d9b3ff; border-color: rgba(180, 106, 255, 0.5); background: rgba(26, 12, 38, 0.75); }
+.radio-panel.clan .radio-btn:hover { background: rgba(180, 106, 255, 0.2); }
+.radio-panel.clan .radio-btn.sell { color: #ffd98a; border-color: rgba(255, 210, 74, 0.5); }
+.radio-panel.clan .radio-btn.sell:hover { background: rgba(255, 210, 74, 0.16); }
 
 /* stage 3 · always-on reputation chips in the HUD                        */
 .hud-rep { display: flex; gap: 6px; margin-top: 6px; }

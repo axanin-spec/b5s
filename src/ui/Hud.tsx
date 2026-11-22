@@ -74,13 +74,18 @@ function Minimap() {
   return <canvas ref={ref} className="minimap" width={300} height={300} />
 }
 
-/** Space radio: a caravan in range hails us — quick deals without docking (Этап 5b). */
-function RadioPanel({ radio }: { radio: NonNullable<Snapshot['radio']> }) {
+/** Space radio: a caravan in range hails us — quick deals without docking (Этап 5b).
+ *  13d: если на канале бортник кланов — это чёрный рынок: фиолетовый контур,
+ *  тройка в прилавке, «своим» кланы платят жирнее. */
+function RadioPanel({ radio, clanRep }: { radio: NonNullable<Snapshot['radio']>; clanRep: number }) {
   const api = () => gameApi.current
   return (
-    <div className="radio-panel hud-panel">
+    <div className={`radio-panel hud-panel${radio.clan ? " clan" : ""}`}>
       {/* 14а: буква класса из реестра караванов — ветеран виден с первого вызова */}
-      <div className="radio-head">📡 РАДИО · {radio.name}{radio.tier ? ` [${["C", "B", "A"][radio.tier]}]` : ""}</div>
+      <div className="radio-head">{radio.clan ? "⚑ ЧЁРНЫЙ РЫНОК" : "📡 РАДИО"} · {radio.name}{radio.tier ? ` [${["C", "B", "A"][radio.tier]}]` : ""}</div>
+      {radio.clan && (
+        <div className="radio-sub">{clanRep >= REP.FRIENDLY ? "вы свой — берут жирнее, отдают дешевле" : "клановый сходняк в эфире"}</div>
+      )}
       {radio.sells.length > 0 && (
         <div className="radio-sec">
           <div className="radio-sec-title">ПРОДАЁТ</div>
@@ -248,9 +253,10 @@ export function Hud({ snap, isTouch }: { snap: Snapshot; isTouch: boolean }) {
         </button>
       )}
 
-      {/* space radio: a caravan in range offers quick deals without docking (Этап 5b) */}
+      {/* space radio: a caravan in range offers quick deals without docking (Этап 5b);
+          13d: на канале может быть и бортник кланов — тогда это чёрный рынок */}
       {snap.screen === 'playing' && !hud.dockName && snap.radio && snap.radio.name && (
-        <RadioPanel radio={snap.radio} />
+        <RadioPanel radio={snap.radio} clanRep={hud.rep.clan} />
       )}
 
       {/* touch controls */}

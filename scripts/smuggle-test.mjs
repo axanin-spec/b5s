@@ -13,7 +13,11 @@
  *     деньги ходят ИСКЛЮЧИТЕЛЬНО игрок ↔ клановая касса, станция и патруль
  *     не при чём (тариф 13a чёрный рынок не берёт);
  *  5. лор-иммунитет: пираты/флагман никогда не берут бортника в прицел;
- *  6. сейв: клан записывается брутто (кошельки бортников влиты), Альянс — без них.
+ *  6. сейв: клан записывается брутто (кошельки бортников влиты), Альянс — без них;
+ *  7. 13d радио чёрного рынка: бортник в эфире — панель «ЧЁРНЫЙ РЫНОК» (фиолетовая),
+ *     тройка в прилавке, расценки клановой раскладки; «своим» (clan ≥ друж.) —
+ *     отдают дешевле и платят жирнее; сделки ходят игрок ↔ кошелёк бортника
+ *     (казны не шевелятся, delta 0).
  *
  * Использование: npm run build && npm run smuggle   (сервит dist/, как balance-test)
  */
@@ -189,16 +193,93 @@ const okRouteBlackMarket = occSmugs.length > 0
   && occSmugs.every((s) => (s.routeId && s.routeId.startsWith("station-")) || s.ai === AI_FLEE);
 const okDeltaOcc = occ.deltas.every((d) => Math.abs(d) < 0.01);
 
+// ── 4. 13d: радио чёрного рынка — бортник в эфире, «своим» жирнее, ₡ вне казн ──
+const radio13d = await page.evaluate(() => {
+  const TRIO = ["tobacco", "spice", "drugs"];
+  const g = window.__gameApi.current;
+  window.__sim.hide();
+  // ждём бортника в режиме маршрута (не убегшего) и кладём его в зону эфира;
+  // караван может перекричать канал (ближе) — пробуем следующего/доспавним
+  let shot = null;
+  for (let k = 0; k < 10 && !shot; k++) {
+    window.__sim.step(120);
+    const pos = window.__sim.probe().pos;
+    for (const s of window.__sim.smugglers()) {
+      if (s.ai === 2) continue; // AiState.Flee — убегшего в эфир не ставим
+      window.__sim.tmove(s.i, pos[0] + 400, pos[1]);
+      window.__sim.step(60);
+      const r = window.__uiBridge.getSnapshot().radio;
+      if (r && r.clan && r.sells.some((x) => TRIO.includes(x.goodId))) { shot = { idx: s.i, r }; break; }
+    }
+  }
+  if (!shot) return { found: false };
+  window.__sim.pcargo("spice", 6); // трюм — не деньги, инвариант не тронет
+  window.__sim.step(60);
+  const snap0 = window.__uiBridge.getSnapshot().radio;
+  const trioGood = (snap0.sells.find((x) => TRIO.includes(x.goodId)) ?? {}).goodId ?? null;
+  const uBuy0 = snap0.sells.find((x) => x.goodId === trioGood)?.unit ?? -1;
+  const uSell0 = snap0.buys.find((x) => x.goodId === "spice")?.unit ?? -1;
+  window.__sim.rep("clan", 40); // «свой» — раскладка BLACK_FRIEND
+  window.__sim.step(60);
+  const snap1 = window.__uiBridge.getSnapshot().radio;
+  const uBuy1 = snap1.sells.find((x) => x.goodId === trioGood)?.unit ?? -1;
+  const uSell1 = snap1.buys.find((x) => x.goodId === "spice")?.unit ?? -1;
+  // сделки: закуп тройки и сдача специй — только игрок ↔ кошелёк бортника.
+  // gameApi-обёртки radio* ничего не возвращают — успех сверяем по трюму
+  const walletOf = () => window.__sim.smugglers().find((s) => s.i === shot.idx)?.wallet ?? -1;
+  const a0 = window.__econAudit();
+  const w0 = walletOf();
+  const trioBefore = trioGood ? window.__sim.pcargo(trioGood) : -1;
+  if (trioGood) g.radioBuy(shot.idx, trioGood, 1);
+  const trioHeld = trioGood ? window.__sim.pcargo(trioGood) : -1;
+  const okBuy = trioHeld === trioBefore + 1;
+  const a1 = window.__econAudit();
+  const w1 = walletOf();
+  const spiceBefore = window.__sim.pcargo("spice");
+  g.radioSell(shot.idx, "spice", 2);
+  const spiceLeft = window.__sim.pcargo("spice");
+  const okSell = spiceLeft === spiceBefore - 2;
+  const a2 = window.__econAudit();
+  const w2 = walletOf();
+  return {
+    found: true, clanFlag: !!snap0.clan, name: snap0.name, trioGood,
+    uBuy0, uBuy1, uSell0, uSell1, okBuy, okSell, trioHeld, spiceBefore, spiceLeft,
+    buySpend: a0.player - a1.player, walletUp: w1 - w0, clanDriftBuy: a1.pools.clan - a0.pools.clan, deltaBuy: a1.delta,
+    sellGain: a2.player - a1.player, walletDown: w1 - w2, clanDriftSell: a2.pools.clan - a1.pools.clan, deltaSell: a2.delta,
+  };
+});
+// панель рисуется React-ом — дожидаемся кадра коммита и смотрим фиолетовую кожу
+await page.waitForTimeout(250);
+const radioDom = await page.evaluate(() => {
+  const d = document.querySelector(".radio-panel.clan");
+  return { clan: !!d, txt: d ? d.textContent.includes("ЧЁРНЫЙ РЫНОК") : false };
+});
+await page.screenshot({ path: join(ROOT, "verification-shots", "black-radio.png") });
+// панель: флаг канала, тройка в прилавке, фиолетовая кожа и шапка «ЧЁРНЫЙ РЫНОК»
+const okRadioClan = radio13d.found && radio13d.clanFlag && !!radio13d.trioGood
+  && radioDom.clan && radioDom.txt;
+// «своим» жирнее: закупка для игрока дешевле, выплата за его товар — выше
+const okRadioFat = !!radio13d.trioGood && radio13d.uBuy1 > 0 && radio13d.uBuy1 < radio13d.uBuy0
+  && radio13d.uSell1 > 0 && radio13d.uSell1 > radio13d.uSell0;
+// деньги: кассы немые, кошелёк и карман игрока ходят зеркально, delta 0
+const okRadioMoney = radio13d.okBuy === true && radio13d.okSell === true
+  && radio13d.buySpend > 0 && radio13d.buySpend === radio13d.walletUp
+  && radio13d.sellGain > 0 && radio13d.sellGain === radio13d.walletDown
+  && radio13d.clanDriftBuy === 0 && radio13d.clanDriftSell === 0
+  && Math.abs(radio13d.deltaBuy) < 1 && Math.abs(radio13d.deltaSell) < 1;
+
 await done({
   okSpawnStreet, okStreetTrade,
   okSpawnTerminus, okRouteLair, okNoPirateTarget,
   okClanTrade, okLeave, okDelta, okSaveGross,
   okSpawnOccupied, okRouteBlackMarket, okDeltaOcc,
+  okRadioClan, okRadioFat, okRadioMoney,
   noPageErrors: pageErrors.length === 0,
 }, {
   street, counter,
   terminus: { clanStart: term.clanStart, clanEnd: term.clanEnd, samples: term.samples.filter((s) => s.length).slice(0, 3) },
   save: { smugglerFloat: saveCheck.smug, auditClan: saveCheck.a.pools.clan, saveClan: saveCheck.sv?.pools.clan },
   occupied: occ.samples.filter((s) => s.length).slice(0, 2),
+  radio13d, radioDom,
   pageErrors: pageErrors.slice(0, 3),
 });

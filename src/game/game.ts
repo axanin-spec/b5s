@@ -1033,6 +1033,8 @@ export class Game {
     // фонда по базовой цене дока, деньги остаются внутри кланового контура
     const ref = this.dockables.find((dd) => dd.isStation) ?? this.dockables[0];
     if (ref) {
+      // 13d: погрузочный док — «домашний» для радио-отсчёта (как у караванов routeFrom)
+      s.routeFrom = Math.max(0, this.dockables.indexOf(ref));
       const gid = CLAN_ONLY_GOODS[Math.floor(this.rnd() * CLAN_ONLY_GOODS.length)];
       const unit = Math.max(1, Math.round(basePriceOf(ref, gid)));
       const q = Math.min(SMUGGLER.LOAD, Math.floor(s.wallet / unit));
