@@ -1,7 +1,8 @@
 {
-  "name": "game-3d-app",
+  "name": "b5s-beyond-the-5th-sun",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "description": "B5S — Beyond the 5th Sun: browser space sandbox with a shared multiplayer shard. https://b5s.ru",
   "type": "module",
   "scripts": {
     "dev": "vite",
