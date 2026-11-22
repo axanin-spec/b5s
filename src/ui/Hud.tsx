@@ -133,6 +133,8 @@ export function Hud({ snap, isTouch }: { snap: Snapshot; isTouch: boolean }) {
     <>
       {/* top-left: resources */}
       <div className="hud-topleft hud-panel">
+        {/* 13e: титул победителя — над позывным системы, не гаснет никогда */}
+        {hud.legend && <div className="hud-legend" title="Вы сломали пиратскую угрозу. Галактика подписана вашим именем.">🏆 ПОБЕДИТЕЛЬ ГАЛАКТИКИ</div>}
         <div className="hud-system">✦ {hud.systemName}</div>
         {hud.occupied && <div className="hud-occupied">⚑ ОККУПАЦИЯ ПИРАТОВ</div>}
         <div className="hud-credits">₡ {fmt(hud.credits)}</div>

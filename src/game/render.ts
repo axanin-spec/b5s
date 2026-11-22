@@ -60,6 +60,8 @@ export interface RemoteBlip {
   x: number; y: number; a: number; radius: number; tex: HTMLCanvasElement; name: string; hue: number;
   /** id игрока шарда (15c): по нему молнии игрока летят в sendHit, а фид зовёт позывной. */
   pid: string;
+  /** 13e: победитель галактики — позывной рисуется с 🏆. */
+  legend?: boolean;
 }
 
 /** Структурный хозяин кадра: камера, текстуры, пулы сущностей, флаги качества. */
@@ -520,11 +522,12 @@ export function drawAnnotations(c: RenderCtx, ctx: CanvasRenderingContext2D): vo
      * чтобы не спорили с маркерами целей; безымянные катера не подписываем */
     if (st === "playing" && i !== 0 && s.name) callsign(x, y, s.radius, s.name, "rgba(200,216,228,0.7)");
   }
-  /* позывные игроков шарда (15b): цвет = оттенок позывного, как у самого корпуса */
+  /* позывные игроков шарда (15b): цвет = оттенок позывного, как у самого корпуса;
+   * 13e: у победителя галактики титул 🏆 при позывном */
   if (st === "playing") {
     for (const r of c.remotes) {
       const p = pt(c, r.x, r.y);
-      callsign(p.x, p.y, r.radius, r.name, `hsl(${r.hue} 90% 65%)`);
+      callsign(p.x, p.y, r.radius, r.legend ? `🏆 ${r.name}` : r.name, `hsl(${r.hue} 90% 65%)`);
     }
   }
 }

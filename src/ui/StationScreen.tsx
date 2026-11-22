@@ -246,6 +246,8 @@ export function StationScreen({ s }: { s: StationSnapshot }) {
                 <div className="contract-card active-card">
                   <div className="contract-head">
                     <span className={`contract-badge ${s.active.kind}`}>{KIND_NAMES[s.active.kind]}</span>
+                    {/* 13e: наследный заказ — двойная выплата из казны заказчика */}
+                    {s.active.legacy && <span className="contract-badge legacy">наследный</span>}
                     <span className="contract-title">{s.active.title}</span>
                     <span className="contract-reward">₡ {fmt(s.active.reward)}</span>
                   </div>
@@ -264,6 +266,8 @@ export function StationScreen({ s }: { s: StationSnapshot }) {
                     <div className="contract-card" key={o.id}>
                       <div className="contract-head">
                         <span className={`contract-badge ${o.kind}`}>{KIND_NAMES[o.kind]}</span>
+                        {/* 13e: наследный заказ — двойная выплата из казны заказчика */}
+                        {o.legacy && <span className="contract-badge legacy">наследный</span>}
                         <span className="contract-title">{o.title}</span>
                         <span className="contract-reward">₡ {fmt(o.reward)}</span>
                       </div>

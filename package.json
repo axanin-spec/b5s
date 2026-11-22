@@ -2,7 +2,7 @@
   "name": "b5s-beyond-the-5th-sun",
   "private": true,
   "version": "0.1.0",
-  "description": "B5S — Beyond the 5th Sun: browser space sandbox with a shared multiplayer shard. https://b5s.ru",
+  "description": "B5S вЂ” Beyond the 5th Sun: browser space sandbox with a shared multiplayer shard. https://b5s.ru",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -38,6 +38,8 @@
     "ttl": "node scripts/ttl-test.mjs",
     "prenet": "npm run build:test",
     "net": "node scripts/net-test.mjs",
+    "prepostwin": "npm run build:test",
+    "postwin": "node scripts/post-victory-test.mjs",
     "preboss": "npm run build:test",
     "boss": "node scripts/boss-test.mjs",
     "prepvp": "npm run build:test",

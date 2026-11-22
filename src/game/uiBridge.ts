@@ -43,6 +43,8 @@ export interface HudData {
   /** Active waypoint label + straight-line distance, null = no route plotted. */
   waypointName: string | null;
   waypointDist: number;
+  /** Пост-игра (13e): игрок уже объявил победу — HUD носит титул 🏆. */
+  legend: boolean;
 }
 
 /** Star chart payload: the galaxy graph + the schematic of every system. */
@@ -111,10 +113,11 @@ export interface StationSnapshot {
   pardons: number;
   /** Shown above the trade table when standing bends prices. */
   priceNote: string | null;
-  /** Broker offers — empty while a contract is active or board is restocking. */
-  contracts: { id: number; kind: string; title: string; desc: string; reward: number; timeLimit: number }[];
+  /** Broker offers — empty while a contract is active or board is restocking.
+   *  legacy (13e): наследный контракт победителя — двойная награда из казны. */
+  contracts: { id: number; kind: string; title: string; desc: string; reward: number; timeLimit: number; legacy?: boolean }[];
   /** Currently accepted contract (also visible here while docked). */
-  active: { kind: string; title: string; desc: string; reward: number; done: number; need: number; timeLeft: number } | null;
+  active: { kind: string; title: string; desc: string; reward: number; done: number; need: number; timeLeft: number; legacy?: boolean } | null;
   /** Верфь и лавка снаряжения (Этап 7). */
   fleet: FleetSnapshot;
 }

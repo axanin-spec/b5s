@@ -4,7 +4,7 @@
  * структурном контексте MissionsCtx; Game держит тонкие обёртки.
  */
 
-import { CONTRACTS, CONVOY, GOODS, PIRATE_BRANCH, PIRATE_ECON, RAID, REP, SYSTEMS, WORLD_CFG } from "./config";
+import { CONTRACTS, CONVOY, GOODS, PIRATE_BRANCH, PIRATE_ECON, POSTWIN, RAID, REP, SYSTEMS, WORLD_CFG } from "./config";
 import type { SystemDef } from "./config";
 import type { ActiveContract, ContractOffer, Dockable, Faction, OccupationState, RaidOp, Ship } from "./types";
 import type { EconCtx } from "./economy";
@@ -49,6 +49,30 @@ export interface MissionsCtx extends EconCtx {
 /* Доска контрактов                                                    */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Пост-игра (13e): галактика помнит победителя — брокеры и клановая доска
+ * изредка выкладывают наследный заказ: охотничий расклад, награда вдвое.
+ * Платит казна заказчика, поэтому неотягощённого заказа доска не видит:
+ * если в пуле меньше двойной награды, наследный контракт не выставляется.
+ */
+function maybePostLegacy(c: MissionsCtx, funder: "alliance" | "clan", boost: number): void {
+  if (!c.player.victoryShown || c.rnd() >= POSTWIN.LEGACY_CHANCE) return;
+  const jit = (base: number) => Math.round((base * (1 + (c.rnd() * 2 - 1) * CONTRACTS.JITTER)) / 50) * 50;
+  const n = 4 + Math.floor(c.rnd() * 3);
+  const reward = jit((650 + 140 * n) * boost * POSTWIN.LEGACY_MULT);
+  if (c.pools[funder] < reward) return; // казна не тянет вдвое — наследная доска молчит
+  c.offers.push({
+    id: ++c.contractSeq, kind: "hunt", funder,
+    title: funder === "alliance" ? "Наследный контракт Альянса" : "Наследный заказ клана",
+    desc: funder === "alliance"
+      ? `Галактика подписана вашим именем. Фундаторский фонд Альянса выкупает старые счета: ${n} пиратов в системе ${c.systemDef.name} — награда вдвое против обычного, из наследной казны.`
+      : `Победителя в кланах помнят: сходняк распечатывает наследную кубышку — ${n} чужих головорезов в системе ${c.systemDef.name}, выплата вдвое.`,
+    reward, timeLimit: CONTRACTS.TIME_HUNT,
+    need: n, goodId: "", qty: 0, destId: "", destName: "",
+    legacy: true,
+  });
+}
+
 /** One offer of each kind per docking; the broker restocks every undock. */
 export function genOffers(c: MissionsCtx, here: Dockable): void {
   c.offers = [];
@@ -90,6 +114,8 @@ export function genOffers(c: MissionsCtx, here: Dockable): void {
     reward: jit(1150), timeLimit: CONTRACTS.TIME_ESCORT,
     need: 1, goodId: "", qty: 0, destId: dest2.id, destName: dest2.name,
   });
+
+  maybePostLegacy(c, "alliance", boost);
 }
 
 /**
@@ -135,6 +161,8 @@ export function genClanOffers(c: MissionsCtx, here: Dockable): void {
       need: 1, goodId: g.id, qty, destId: dest.id, destName: dest.name,
     });
   }
+
+  maybePostLegacy(c, "clan", 1);
 }
 
 export function acceptContract(c: MissionsCtx, id: number): void {

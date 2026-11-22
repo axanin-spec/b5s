@@ -988,6 +988,8 @@ kbd {
 .contract-badge.transport { background: #ffd24a; }
 .contract-badge.escort { background: #54ffd2; }
 .contract-badge.bounty { background: #d26aff; color: #140a1c; }
+/* 13e: наследный контракт победителя — золото наследной казны */
+.contract-badge.legacy { background: #ffcf5e; color: #241505; box-shadow: 0 0 10px rgba(255, 207, 94, 0.55); }
 
 .contract-title {
   font-size: 15px;
@@ -1166,6 +1168,16 @@ kbd {
   font-size: 12px;
   letter-spacing: 0.08em;
   text-shadow: 0 0 10px rgba(255, 90, 74, 0.6);
+}
+
+/* титул победителя галактики (Этап 13e): золото над позывным системы, не мигает */
+.hud-legend {
+  color: #ffcf5e;
+  font-weight: 800;
+  font-size: 12px;
+  letter-spacing: 0.18em;
+  margin-bottom: 2px;
+  text-shadow: 0 0 12px rgba(255, 207, 94, 0.65);
 }
 
 .waypoint-chip {

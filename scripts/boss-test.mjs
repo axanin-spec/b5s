@@ -115,6 +115,9 @@ const mk4 = await page.evaluate(() => {
 const kill4 = await page.evaluate(() => {
   window.__sim.bossKillNow();
   window.__gameApi.current.continuePlaying?.();
+  // 4-е потопление ≥ FLAGSHIPS_TO_WIN → победа сработала (13e). Сбрасываем флаг:
+  // ниже базовая эскалация 13b (кап 8, выкуп ×1), а не пост-игровая (кап 16, ×2)
+  window.__sim.unwin();
   return window.__sim.bossInfo() === null;
 });
 

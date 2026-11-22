@@ -74,14 +74,15 @@ export function TradeWindow({ cargo, systemName, onClose }: {
   const mineSent = sent.filter((s) => !eventOf(s.id))
   const resolved = sent.length - mineSent.length
 
-  const nearby: { id: string; name: string; dist: number }[] = []
+  // 13e: у соседа-победителя титул 🏆 в ростере (state.legend из шарда)
+  const nearby: { id: string; name: string; dist: number; legend: boolean }[] = []
   if (me) {
     for (const pl of worldNet.players.values()) {
       if (pl.id === worldNet.selfId || pl.dead || !pl.state) continue
       const st = pl.state
       if (st.sys && st.sys !== systemName) continue
       const dist = Math.hypot(st.x - me.x, st.y - me.y) * WORLD_CFG.HALF
-      if (dist <= TRADE_RADIUS) nearby.push({ id: pl.id, name: pl.username, dist })
+      if (dist <= TRADE_RADIUS) nearby.push({ id: pl.id, name: pl.username, dist, legend: !!st.legend })
     }
   }
 
@@ -161,7 +162,7 @@ export function TradeWindow({ cargo, systemName, onClose }: {
               className={`trade-peer-pick ${targetId === n.id ? 'active' : ''}`}
               onClick={() => setTargetId(n.id)}
             >
-              {n.name} · {(n.dist / 1000).toFixed(1)}k
+              {n.legend && '🏆 '}{n.name} · {(n.dist / 1000).toFixed(1)}k
             </button>
           ))}
 

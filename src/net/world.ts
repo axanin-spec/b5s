@@ -22,6 +22,9 @@ export interface PlayerState {
   /** 15c: здоровье для серверной оценки боёв (цель без hp считается со 100 hp). */
   hp?: number;
   maxHp?: number;
+  /** 13e: титул «Победитель галактики» — additive, сервер пропустит как unknown,
+   *  пока трек А не добавит поле в sanitizeState. */
+  legend?: boolean;
 }
 
 export interface RemotePlayer {

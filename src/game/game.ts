@@ -6,7 +6,7 @@
  */
 
 import {
-  BOSS_ESC, BOLT_CFG, BLACK_STREET, CONVOY, ECONOMY, EMERGENCY_PULSE, EQUIP, EQUIP_LINES, EQUIP_SELL, FACTION_CFG, GATE_CFG, GOODS, HULLS, HULL_SELL, MODULE_LOOT, OCCUPATION, PATROL_ECON, PICKUP, PIRATE_BRANCH, PIRATE_ECON, PLAYER_CFG, POPULATION, QUALITY, RANKS, RAID,
+  BOSS_ESC, BOLT_CFG, BLACK_STREET, CONVOY, ECONOMY, EMERGENCY_PULSE, EQUIP, EQUIP_LINES, EQUIP_SELL, FACTION_CFG, GATE_CFG, GOODS, HULLS, HULL_SELL, MODULE_LOOT, OCCUPATION, PATROL_ECON, PICKUP, PIRATE_BRANCH, PIRATE_ECON, PLAYER_CFG, POPULATION, POSTWIN, QUALITY, RANKS, RAID,
   MONEY_TOTAL, POOLS, REPAIR_COST_PER_HP, REP, SAVE_VERSION, AUTOSAVE_INTERVAL, SMUGGLER, STARTER_KIT, SYSTEMS, TRADER_AI, TRADER_GUILD, TRADER_TIERS, INSPECT, CONTRABAND_GOODS,
   VICTORY_SHARE, WORLD_CFG,
 } from "./config";
@@ -870,7 +870,8 @@ export class Game {
    */
   /** 13b: римская метка поколения для сводок; gen1 — порядковый номер (первый = 1). */
   private mkLabel(gen1: number): string {
-    const R = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII"];
+    // 13e: после победы поколение ползёт до POSTWIN.GEN_CAP — разметка до XVII
+    const R = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII", "XIII", "XIV", "XV", "XVI", "XVII"];
     return R[Math.min(Math.max(gen1, 1), R.length) - 1];
   }
 
@@ -891,8 +892,9 @@ export class Game {
   private spawnBossResident(): void {
     const a = this.rnd() * Math.PI * 2;
     const x = Math.cos(a) * 2400, y = Math.sin(a) * 2400;
-    // 13b: поколение = сколько флагманов кланы уже потеряли (после победы — песочница)
-    const g = Math.min(this.player.bossKills, BOSS_ESC.GEN_CAP);
+    // 13b: поколение = сколько флагманов кланы уже потеряли (после победы — песочница);
+    // 13e: у победителя потолок мягче — эскалация идёт до POSTWIN.GEN_CAP
+    const g = Math.min(this.player.bossKills, this.player.victoryShown ? POSTWIN.GEN_CAP : BOSS_ESC.GEN_CAP);
     const idx = this.spawnShip("boss", x, y);
     if (idx < 0) return;
     const b = this.ships[idx];
@@ -1035,10 +1037,12 @@ export class Game {
       // the cruiser carries its own price on the hull (Этап 11b)
       let bountyRange: readonly number[] = s.cruiser ? PATROL_ECON.CRUISER.bounty : cfg.bounty;
       // 13b: выкуп над головной машиной тяжелее с каждым поколением —
-      // кланы страхуют флагман дороже и платят за него с той же кассы
-      if (s.faction === "boss" && s.bossGen > 0) {
-        const m = Math.min(BOSS_ESC.BOUNTY_CAP, 1 + BOSS_ESC.BOUNTY_PER * s.bossGen);
-        bountyRange = [Math.round(bountyRange[0] * m), Math.round(bountyRange[1] * m)];
+      // кланы страхуют флагман дороже и платят за него с той же кассы.
+      // 13e: после победы надбавка победителю вдвое сверх поколенной (казна та же)
+      if (s.faction === "boss") {
+        let m = s.bossGen > 0 ? Math.min(BOSS_ESC.BOUNTY_CAP, 1 + BOSS_ESC.BOUNTY_PER * s.bossGen) : 1;
+        if (this.player.victoryShown) m *= POSTWIN.BOUNTY_MULT;
+        if (m !== 1) bountyRange = [Math.round(bountyRange[0] * m), Math.round(bountyRange[1] * m)];
       }
       const amount = Math.round(bountyRange[0] + this.rnd() * (bountyRange[1] - bountyRange[0]));
       // Pirate bounties come out of the patrol treasury (5c): an empty treasury makes
@@ -1345,6 +1349,7 @@ export class Game {
           x: s.x * WORLD_CFG.HALF, y: s.y * WORLD_CFG.HALF, a: s.a,
           radius: HULLS[hullIdx].radius, tex: this.remoteTex(hullIdx, hue),
           name: pl.username, hue, pid: pl.id,
+          legend: !!s.legend, // 13e: титул победителя галактики при позывном
         });
       }
     }
@@ -1699,6 +1704,8 @@ export class Game {
         goodId: this.contract.goodId, qty: this.contract.qty,
         destId: this.contract.destId, destName: this.contract.destName,
         funder: this.contract.funder,
+        // 13e: наследная отметка переживает перезагрузку (старые сейвы — без поля)
+        legacy: this.contract.legacy,
       } : null,
       fluct,
       // 10a: market intel goes with the save — serialized as-is, entries are replaced whole
@@ -2260,6 +2267,8 @@ export class Game {
           sys: this.systemDef.name, hull: this.player.ship,
           // 15c: сервер по этим числам ведёт оценку боёв (без hp цель = 100 hp)
           hp: Math.round(me.hp), maxHp: Math.round(me.maxHp),
+          // 13e: титул победителя летит в шард — ростер и позывные рисуют 🏆
+          legend: this.player.victoryShown,
         });
       }
     }
@@ -3281,6 +3290,8 @@ export class Game {
       waypointDist: this.waypoint
         ? Math.round(Math.hypot(this.waypoint.x - p.x, this.waypoint.y - p.y))
         : 0,
+      // 13e: титул «Победитель галактики» — живёт в сейве, показывается всегда
+      legend: this.player.victoryShown,
     };
     // radio offer refreshed with the HUD — a caravan in range appears on the band live
     uiBridge.set({ hud, radio: this.radioData(), feed: this.feedView() });
@@ -3358,11 +3369,13 @@ export class Game {
           : "Чёрный рынок: краденое берут с руками, вопросов не задают")
         : mod.buy < 1 ? "Союзная скидка — Альянс помнит ваши услуги"
         : mod.buy > 1 ? "Враждебные цены — репутация в Альянсе на дне" : null,
-      contracts: this.offers.map((o) => ({ id: o.id, kind: o.kind, title: o.title, desc: o.desc, reward: o.reward, timeLimit: o.timeLimit })),
+      // 13e: legacy-отметка доходит до доски — терминал рисует бейдж «наследный»
+      contracts: this.offers.map((o) => ({ id: o.id, kind: o.kind, title: o.title, desc: o.desc, reward: o.reward, timeLimit: o.timeLimit, legacy: o.legacy })),
       active: this.contract ? {
         kind: this.contract.kind, title: this.contract.title, desc: this.contract.desc,
         reward: this.contract.reward, done: this.contract.done, need: this.contract.need,
         timeLeft: Math.max(0, Math.ceil(this.contract.timeLeft)),
+        legacy: this.contract.legacy,
       } : null,
       fleet: this.fleetSnapshot(d),
     };
@@ -3736,14 +3749,28 @@ export class Game {
           elites: scr.filter((s) => s.elite).map((s) => ({ name: s.name, hp: s.maxHp, shield: s.maxShield, dmg: s.dmg, radius: s.radius })),
         };
       },
+      // 13e (post-victory зонд): титул, выход из экрана победы, кассы под гейт
+      legend: () => this.player.victoryShown,
+      winNow: () => { this.victory("проверка"); return this.sm.state; },
+      continuePlay: () => {
+        if (this.sm.state === "victory") { this.sm.transition("playing"); uiBridge.set({ end: null }); this.pushStatic(); }
+        return this.sm.state;
+      },
+      // «развыиграть»: вернуть мир в до-победный режим (после случайной победы в 13b-тестах)
+      unwin: () => { this.player.victoryShown = false; return this.player.victoryShown; },
+      poolAmt: (id: string) => Math.round(this.pools[id as PoolId] ?? 0),
+      // инвариант ₡ цел: drain/gain и pay/pay — те же траектории денег, что в игре
+      drainPool: (id: string) => this.gain(this.pools[id as PoolId], id as PoolId),
+      payPool: (id: string, v: number) => { this.pay(v, id as PoolId); return Math.round(this.pools[id as PoolId] ?? 0); },
       // общий шар (15b, трек Б): ростер, собранный игрой к кадру, + наш исходящий state
       net: () => ({
         status: worldNet.status,
         selfId: worldNet.selfId,
         sys: this.systemDef.name,
         hull: this.player.ship,
+        legend: this.player.victoryShown,
         remotes: this.remotes.map((r) => ({
-          name: r.name, hue: r.hue, radius: r.radius, pid: r.pid,
+          name: r.name, hue: r.hue, radius: r.radius, pid: r.pid, legend: r.legend,
           x: Math.round(r.x), y: Math.round(r.y), a: Math.round(r.a * 100) / 100,
         })),
       }),
@@ -3770,7 +3797,7 @@ export class Game {
         return { credits: this.player.credits, cargo: { ...this.player.cargo } };
       },
       // отладочный ростер (net-test): подсовывает worldNet чужих игроков без сервера
-      fakePlayers: (arr: { id: string; username: string; x: number; y: number; a: number; sys?: string; hull?: string; dead?: boolean }[] | null, selfId?: string) => {
+      fakePlayers: (arr: { id: string; username: string; x: number; y: number; a: number; sys?: string; hull?: string; dead?: boolean; legend?: boolean }[] | null, selfId?: string) => {
         if (arr === null) return { count: worldNet.players.size };
         worldNet.status = "online";
         worldNet.selfId = selfId ?? "self-test";
@@ -3778,7 +3805,7 @@ export class Game {
         for (const p of arr) {
           worldNet.players.set(p.id, {
             id: p.id, username: p.username, dead: p.dead,
-            state: { x: p.x, y: p.y, a: p.a, sys: p.sys, hull: p.hull },
+            state: { x: p.x, y: p.y, a: p.a, sys: p.sys, hull: p.hull, legend: p.legend },
           });
         }
         return { count: worldNet.players.size };
