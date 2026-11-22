@@ -6,7 +6,7 @@
  */
 
 import {
-  BOSS_ESC, BOLT_CFG, BLACK_STREET, CLAN_ONLY_GOODS, CONTRACTS, CONVOY, ECONOMY, EMERGENCY_PULSE, EQUIP, EQUIP_LINES, EQUIP_SELL, FACTION_CFG, GATE_CFG, GOODS, HULLS, HULL_SELL, MODULE_LOOT, OCCUPATION, PATROL_ECON, PICKUP, PIRATE_BRANCH, PIRATE_ECON, PLAYER_CFG, POPULATION, QUALITY, RANKS, RAID,
+  BOSS_ESC, BOLT_CFG, BLACK_STREET, CONVOY, ECONOMY, EMERGENCY_PULSE, EQUIP, EQUIP_LINES, EQUIP_SELL, FACTION_CFG, GATE_CFG, GOODS, HULLS, HULL_SELL, MODULE_LOOT, OCCUPATION, PATROL_ECON, PICKUP, PIRATE_BRANCH, PIRATE_ECON, PLAYER_CFG, POPULATION, QUALITY, RANKS, RAID,
   MONEY_TOTAL, POOLS, REPAIR_COST_PER_HP, REP, SAVE_VERSION, AUTOSAVE_INTERVAL, SMUGGLER, STARTER_KIT, SYSTEMS, TRADER_AI, TRADER_GUILD, TRADER_TIERS, INSPECT, CONTRABAND_GOODS,
   VICTORY_SHARE, WORLD_CFG,
 } from "./config";
@@ -15,6 +15,8 @@ import { AudioSystem } from "./audio";
 import * as econ from "./economy";
 import * as fleet from "./fleet";
 import * as missions from "./missions";
+import * as spawn from "./spawn"; // 13f: заселение бортами и популяция — свой модуль (9e)
+import { blankShip, MAX_SHIPS } from "./spawn"; // переехали сюда же: здесь они нужнее всех
 import { renderFrame, renderGlFrame, paletteTex } from "./render";
 import type { RemoteBlip } from "./render";
 import { GlLayer } from "./gllayer"; // 13f: жизненный цикл WebGL-слоя — свой модуль (three остаётся async-чанком)
@@ -38,7 +40,6 @@ import { gameApi, uiBridge, type EndStats, type GameApi, type HudData, type MapS
 import type { ActiveContract, Bolt, ContractOffer, Dockable, Faction, InstalledGear, MarketIntelEntry, MoneyPools, OccupationState, Pickup, PlayerState, PoolId, RaidOp, SaveGame, Ship } from "./types";
 import { AiState } from "./types";
 
-const MAX_SHIPS = 40;
 const MAX_BOLTS = 200;
 /** 14e: при TTL 600 с галактика копит ~180 живых поддонов (замер) — ёмкость с запасом ×1.4. */
 const MAX_PICKUPS = 256;
@@ -48,27 +49,6 @@ const BRIDGES = import.meta.env.DEV || import.meta.env.VITE_BRIDGES === "1";
 
 /** Ship textures are drawn pointing up; hull visual radius ≈ texture half-height. */
 const SHIP_SCALE = 2.4;
-
-function blankShip(): Ship {
-  return {
-    active: false, faction: "trader",
-    x: 0, y: 0, vx: 0, vy: 0, angle: 0,
-    hp: 1, maxHp: 1, shield: 0, maxShield: 0,
-    accel: 0, maxSpeed: 0, radius: 20,
-    dmg: 0, fireRate: 0, fireCooldown: 0, sinceHit: 99,
-    ai: AiState.Wander, targetIdx: -1, tx: 0, ty: 0, wanderT: 0,
-    routeFrom: 0, routeTo: 0, name: "", wallet: 0, smuggler: false, cargo: {},
-    escortId: -1, raidId: -1, raidGuard: false, screen: false, cruiser: false, thinkT: 0, thinkDt: 0.42, trailT: 0, regroupT: 0, regroupUsed: false, sprite: null,
-    // 13b: поколение флагмана и асы — нейтрально для всех остальных бортов
-    bossGen: 0, elite: false,
-    // 14а: боевой караван и наёмный конвой — нейтральные значения до первого приказа
-    angerIdx: -1, angerT: 0, tier: 0, escort: false, escortOf: -1,
-    // 14b: гильдейская повинность — отсчёт прибыли, сигнал бедствия, ответ катера
-    voyStart: 0, callCd: 0, callT: 0, callIdx: -1,
-    // 14d: таможный канал — катер ведёт досмотр, цель и пауза между проверками
-    scanIdx: -1, scanT: 0, inspectCd: 0,
-  };
-}
 
 /**
  * Can a bolt fired by `from` damage `target`? Player may hit anyone; since 14а a caravan
@@ -204,7 +184,7 @@ export class Game {
   private damageFlash = 0;
 
   dockTarget: Dockable | null = null; // public: economy.ts выбирает кассу сделки
-  private bossIdx = -1;
+  bossIdx = -1; // public: spawn.ts (13f) сбрасывает слот флагмана при freeShip
   private bossEscortsSpawned = false;
   splashRemoved = false; // public: render.ts
 
@@ -568,88 +548,18 @@ export class Game {
   /* Spawning                                                            */
   /* ================================================================== */
 
+  /* Заселение бортами — реализация в spawn.ts (Этап 13f, конвенция 9a); здесь тонкие обёртки. */
+
   /** armedTrader=false — клановый бортник (spawnSmuggler): без реестра и класса;
    *  с 14с пушки он получает в spawnSmuggler (класс «C», без надбавок реестра). */
   spawnShip(faction: Faction, x: number, y: number, armedTrader = true): number {
-    for (let i = 1; i < MAX_SHIPS; i++) {
-      const s = this.ships[i];
-      if (s.active) continue;
-      const cfg = FACTION_CFG[faction as keyof typeof FACTION_CFG];
-      Object.assign(s, blankShip());
-      s.active = true;
-      s.faction = faction;
-      s.x = x; s.y = y;
-      s.angle = this.rnd() * Math.PI * 2;
-      s.hp = s.maxHp = cfg.hp;
-      s.shield = s.maxShield = cfg.shield;
-      s.accel = cfg.accel; s.maxSpeed = cfg.maxSpeed;
-      s.radius = cfg.radius;
-      s.dmg = cfg.dmg; s.fireRate = cfg.fireRate;
-      s.targetIdx = -1;
-      s.ai = faction === "trader" ? AiState.Route : AiState.Wander;
-      s.tx = x; s.ty = y;
-      if (faction === "trader") {
-        // working capital is Alliance money until spent (5b): a poor Alliance sends poor ships
-        // 14а: реестр караванов ведётся по позывному — постараемся выдать незанятый
-        let nm = CONTRACTS.CALLSIGNS[Math.floor(this.rnd() * CONTRACTS.CALLSIGNS.length)];
-        if (armedTrader) {
-          for (let t = 0; t < 5; t++) {
-            const c = CONTRACTS.CALLSIGNS[Math.floor(this.rnd() * CONTRACTS.CALLSIGNS.length)];
-            if (!this.ships.some((o, j) => j !== i && j > 0 && o.active && o.faction === "trader" && !o.smuggler && o.name === c)) { nm = c; break; }
-          }
-        }
-        s.name = nm;
-        const tierIdx = armedTrader ? (this.traderTiers[s.name]?.tier ?? 0) : 0;
-        const tt = TRADER_TIERS.TIERS[tierIdx];
-        s.wallet = Math.min(
-          Math.round((TRADER_AI.CASH[0] + this.rnd() * (TRADER_AI.CASH[1] - TRADER_AI.CASH[0])) * tt.walletMult),
-          Math.max(0, Math.round(this.pools.alliance)),
-        );
-        this.pools.alliance -= s.wallet;
-        // a starter hold so freshly launched ships have something to hawk
-        // (14g: зарегистрированный караван контрабандную тройку не возит)
-        const legal = GOODS.filter((g) => !econ.isClanOnlyGood(g.id));
-        for (let k = 0; k < 2; k++) {
-          const g = legal[Math.floor(this.rnd() * legal.length)];
-          s.cargo[g.id] = (s.cargo[g.id] ?? 0) + 3 + Math.floor(this.rnd() * 4);
-        }
-        // 14а: класс из реестра — корпус, броня и оборонительная плазма по книге
-        // (конвой наёмный нанимается в pickTraderRoute, куда уходим ниже)
-        s.tier = tierIdx;
-        if (armedTrader) {
-          s.maxHp = tt.hp; s.hp = tt.hp;
-          s.maxShield = tt.shield; s.shield = tt.shield;
-          s.dmg = tt.dmg; s.fireRate = tt.fireRate;
-        }
-        this.pickTraderRoute(i, false); // спавн/загрузка: без найма — до первой ходки
-        s.voyStart = s.wallet; // 14b: прибыль рейса считается от кошелька на выход из дока
-      }
-      return i;
-    }
-    return -1;
+    return spawn.spawnShip(this, faction, x, y, armedTrader);
   }
 
-  freeShip(i: number): void {
-    const s = this.ships[i];
-    if (s.active && s.faction === "trader" && s.wallet > 0) {
-      // each fleet's working capital returns to ITS fund: Alliance for caravans, clans for haulers (Этап 8)
-      this.pools[s.smuggler ? "clan" : "alliance"] += s.wallet;
-      s.wallet = 0;
-    }
-    s.active = false;
-    if (this.bossIdx === i) this.bossIdx = -1;
-    // drop dangling target references
-    for (const sh of this.ships) if (sh.active && sh.targetIdx === i) sh.targetIdx = -1;
-    // 14а: конвоир, оставшийся без хозяина, становится обычным патрулем (жалованье не возвращается)
-    for (const sh of this.ships) if (sh.active && sh.escort && sh.escortOf === i) { sh.escort = false; sh.escortOf = -1; sh.targetIdx = -1; }
-  }
+  freeShip(i: number): void { spawn.freeShip(this, i); }
 
   /** Units of cargo in a trader hold. */
-  private traderLoad(s: Ship): number {
-    let n = 0;
-    for (const g of GOODS) n += Math.round(s.cargo[g.id] ?? 0);
-    return n;
-  }
+  private traderLoad(s: Ship): number { return spawn.traderLoad(s); }
 
   /** Trader trade volume nudges the local price toward equilibrium (Этап 5b). */
   private pushFluct(d: Dockable, goodId: string, delta: number): void {
@@ -663,58 +573,7 @@ export class Game {
    */
   /** hire=false — спавновый пересчёт (в т.ч. загрузка сейва): конвой нанимается на выходе
    *  из дока, иначе continueGame повторно платил бы жалованье до сверки брутто-Альянса. */
-  pickTraderRoute(idx: number, hire = true): void {
-    const s = this.ships[idx];
-    const n = this.dockables.length;
-    if (n === 0) return;
-    const loaded = this.traderLoad(s) > 0;
-    let best = -1, bestV = -Infinity;
-    for (let j = 0; j < n; j++) {
-      if (n > 1 && j === s.routeFrom) continue; // we are standing at routeFrom
-      const d = this.dockables[j];
-      // civilian caravans don't know the way to the smuggler lair — and its
-      // deflated black-market prices would otherwise vacuum the whole fleet in
-      if (d.id === PIRATE_BRANCH.LAIR.id) continue;
-      let v: number;
-      if (loaded) {
-        v = 0;
-        // 14g: клановая тройка маршруту не аргумент — караван её не везёт
-        for (const g of GOODS) if (!econ.isClanOnlyGood(g.id)) v += priceOf(d, g.id) * ECONOMY.SELL_FACTOR * Math.round(s.cargo[g.id] ?? 0);
-      } else {
-        // best spread: buy cheap here, sell dear at the far side
-        v = -Infinity;
-        for (const g of GOODS) {
-          if (econ.isClanOnlyGood(g.id)) continue;
-          let far = 0;
-          for (let k = 0; k < n; k++) {
-            if (k === j) continue;
-            const p = priceOf(this.dockables[k], g.id) * ECONOMY.SELL_FACTOR;
-            if (p > far) far = p;
-          }
-          const spread = far - priceOf(d, g.id);
-          if (spread > v) v = spread;
-        }
-      }
-      v *= 1 + (this.rnd() - 0.5) * 0.25;
-      if (v > bestV) { bestV = v; best = j; }
-    }
-    s.routeTo = best < 0 ? (s.routeFrom + 1) % n : best;
-    const d = this.dockables[s.routeTo];
-    s.tx = d.x; s.ty = d.y;
-    // 14а: караван класса «A» нанимает конвой из фонда выхода — плата идёт в казну патруля
-    const t = TRADER_TIERS.TIERS[s.tier];
-    if (hire && t.escort && !s.smuggler && s.wallet >= t.escortCost
-      && !this.ships.some((o, j) => j > 0 && o.active && o.escort && o.escortOf === idx)) {
-      const ei = this.spawnShip("patrol", s.x + 260, s.y + 140);
-      if (ei >= 0) {
-        s.wallet -= t.escortCost;
-        this.pools.patrol += t.escortCost;
-        this.ships[ei].escort = true;
-        this.ships[ei].escortOf = idx;
-        this.setNews(`${s.name} нанял конвой на переход — ${t.escortCost} ₡ в казну патруля`);
-      }
-    }
-  }
+  pickTraderRoute(idx: number, hire = true): void { spawn.pickTraderRoute(this, idx, hire); }
 
   /**
    * Market call (Этап 5b): on arrival the caravan sells its hold, then buys the good
@@ -987,114 +846,23 @@ export class Game {
     return econ.radioSell(this, shipIdx, goodId, qty);
   }
 
-  private spawnAtEdge(faction: Faction): void {
-    const p = this.ships[0];
-    const HALF = WORLD_CFG.HALF;
-    for (let tries = 0; tries < 8; tries++) {
-      const a = this.rnd() * Math.PI * 2;
-      const r = HALF * (0.75 + this.rnd() * 0.35);
-      const x = Math.cos(a) * r, y = Math.sin(a) * r;
-      if (Math.hypot(x - p.x, y - p.y) > 3800) {
-        this.spawnShip(faction, x, y);
-        return;
-      }
-    }
-  }
+  private spawnAtEdge(faction: Faction): void { spawn.spawnAtEdge(this, faction); }
 
   /* ================================================================== */
   /* Clan haulers (Этап 8): grey traffic lair ⇄ occupied system          */
   /* ================================================================== */
 
-  /** True in clan waters — the lair in Terminus or the occupied system:
-   *  the heartland of the route. С 14с бортники ходят и прочь отсюда, но
-   *  именно тут их караванная смена несётся вдвое гуще (SMUGGLER.COUNT). */
-  private smuggleHere(): boolean {
-    return this.systemDef.id === PIRATE_BRANCH.LAIR_SYSTEM || this.hereOccupied();
-  }
+  /** True in clan waters — the lair in Terminus or the occupied system. */
+  private smuggleHere(): boolean { return spawn.smuggleHere(this); }
 
-  /**
-   * Clan hauler spawn (Этап 8). A trader hull with the capital rerouted: the spawn
-   * drew Alliance money by default — refund it and draw the stake from the clan fund.
-   */
-  private spawnSmuggler(): void {
-    const p = this.ships[0];
-    const HALF = WORLD_CFG.HALF;
-    const a = this.rnd() * Math.PI * 2;
-    const r = HALF * (0.75 + this.rnd() * 0.35);
-    const x = Math.cos(a) * r, y = Math.sin(a) * r;
-    if (Math.hypot(x - p.x, y - p.y) <= 3800) return; // don't surface a hauler on the player's nose
-    const idx = this.spawnShip("trader", x, y, false); // 14с: без реестра и класса — но с пушкой ниже
-    if (idx < 0) return;
-    const s = this.ships[idx];
-    this.pools.alliance += s.wallet;
-    s.wallet = Math.min(
-      Math.round(SMUGGLER.CASH[0] + this.rnd() * (SMUGGLER.CASH[1] - SMUGGLER.CASH[0])),
-      Math.max(0, Math.round(this.pools.clan)),
-    );
-    this.pools.clan -= s.wallet;
-    s.smuggler = true;
-    s.name = SMUGGLER.CALLSIGNS[Math.floor(this.rnd() * SMUGGLER.CALLSIGNS.length)];
-    // 14с: бортник вооружён как караван класса «C» — конвоя ему нанимать не у кого
-    // (реестра нет), зато он отвечает рейдеру, севшему на хвост вдали от клановых вод
-    const cGun = TRADER_TIERS.TIERS[0];
-    s.dmg = cGun.dmg; s.fireRate = cGun.fireRate;
-    // 14с: выходит гружёным — тонны клановой тройки с базы; расплату берёт из своего
-    // фонда по базовой цене дока, деньги остаются внутри кланового контура
-    const ref = this.dockables.find((dd) => dd.isStation) ?? this.dockables[0];
-    if (ref) {
-      // 13d: погрузочный док — «домашний» для радио-отсчёта (как у караванов routeFrom)
-      s.routeFrom = Math.max(0, this.dockables.indexOf(ref));
-      const gid = CLAN_ONLY_GOODS[Math.floor(this.rnd() * CLAN_ONLY_GOODS.length)];
-      const unit = Math.max(1, Math.round(basePriceOf(ref, gid)));
-      const q = Math.min(SMUGGLER.LOAD, Math.floor(s.wallet / unit));
-      if (q > 0) {
-        s.wallet -= q * unit;
-        this.pools.clan += q * unit;
-        s.cargo[gid] = (s.cargo[gid] ?? 0) + q;
-      }
-    }
-    this.pickSmugglerRoute(idx);
-  }
+  /** Clan hauler spawn (Этап 8) — тело в spawn.ts. */
+  private spawnSmuggler(): void { spawn.spawnSmuggler(this); }
 
-  /**
-   * Heavy cruiser «Варта» (Этап 11b): commissioned when the watch treasury is fat.
-   * A patrol hull with the stats overriden from PATROL_ECON.CRUISER; despawns only
-   * by dying — a drained treasury stops the replacement, not the ship itself.
-   */
-  private spawnCruiser(): void {
-    if (!this.dockables.length) return;
-    const d = this.dockables[Math.floor(this.rnd() * this.dockables.length)];
-    const a = this.rnd() * Math.PI * 2;
-    const idx = this.spawnShip("patrol", d.x + Math.cos(a) * 600, d.y + Math.sin(a) * 600);
-    if (idx < 0) return;
-    const s = this.ships[idx];
-    const c = PATROL_ECON.CRUISER;
-    s.hp = s.maxHp = c.hp;
-    s.shield = s.maxShield = c.shield;
-    s.accel = c.accel; s.maxSpeed = c.maxSpeed;
-    s.dmg = c.dmg; s.fireRate = c.fireRate;
-    s.radius = c.radius;
-    s.cruiser = true;
-    s.name = "Варта";
-  }
+  /** Heavy cruiser «Варта» (Этап 11b) — тело в spawn.ts. */
+  private spawnCruiser(): void { spawn.spawnCruiser(this); }
 
-  /** One leg of the grey route: the lair in Terminus, a black-market dock in occupied space. */
-  private pickSmugglerRoute(idx: number): void {
-    const s = this.ships[idx];
-    let best = -1;
-    if (this.systemDef.id === PIRATE_BRANCH.LAIR_SYSTEM) {
-      best = this.dockables.findIndex((d) => d.id === PIRATE_BRANCH.LAIR.id);
-    } else {
-      const docks: number[] = [];
-      for (let j = 0; j < this.dockables.length; j++) if (this.dockables[j].isStation) docks.push(j);
-      best = docks.length ? docks[Math.floor(this.rnd() * docks.length)] : -1;
-    }
-    if (best < 0) { this.freeShip(idx); return; } // no endpoint here — fold the run
-    s.routeTo = best;
-    s.ai = AiState.Route;
-    const d = this.dockables[best];
-    s.tx = d.x; s.ty = d.y;
-  }
+  /** One leg of the grey route (spawn.ts). */
+  private pickSmugglerRoute(idx: number): void { spawn.pickSmugglerRoute(this, idx); }
 
   /**
    * The occupation flagship is a resident: it orbits its captured star with an
@@ -2870,56 +2638,14 @@ export class Game {
     return threat;
   }
 
-  /**
-   * How strong a pirate presence the clan fund can staff (Этап 5c): rich clans post the
-   * full POPULATION.PIRATES, a thin fund keeps the flotilla at PIRATES_MIN — sinking their
-   * hulls literally thins the ranks. Interpolates linearly between PIRATE_ECON.FUND_THIN
-   * and FUND_FULL, then adds the local system/occupation modifiers.
-   */
-  private pirateStrength(): number {
-    const t = (this.pools.clan - PIRATE_ECON.FUND_THIN) / (PIRATE_ECON.FUND_FULL - PIRATE_ECON.FUND_THIN);
-    const base = POPULATION.PIRATES_MIN
-      + Math.round((POPULATION.PIRATES - POPULATION.PIRATES_MIN) * Math.max(0, Math.min(1, t)));
-    return base + this.systemDef.pirateBoost + (this.hereOccupied() ? OCCUPATION.PIRATE_EXTRA : 0);
-  }
+  /** Потолок пиратского флота по клановой казне (Этап 5c) — расчёт в spawn.ts. */
+  private pirateStrength(): number { return spawn.pirateStrength(this); }
 
-  /**
-   * Constabulary headcount (Этап 11b): base is per system, but a treasury below
-   * TREASURY_THIN means the watch can't pay full wages — the roster shrinks to a
-   * skeleton crew of THIN_PATROLS.
-   */
-  private patrolStrength(): number {
-    const base = POPULATION.PATROLS + (this.systemDef.patrolBoost ?? 0);
-    return this.pools.patrol < PATROL_ECON.TREASURY_THIN ? Math.min(base, PATROL_ECON.THIN_PATROLS) : base;
-  }
+  /** Constabulary headcount (Этап 11b) — расчёт в spawn.ts. */
+  private patrolStrength(): number { return spawn.patrolStrength(this); }
 
-  private maintainPopulation(): void {
-    let pirates = 0, patrols = 0, traders = 0;
-    for (let i = 1; i < MAX_SHIPS; i++) {
-      const s = this.ships[i];
-      if (!s.active) continue;
-      if (s.faction === "pirate") pirates++;
-      else if (s.faction === "patrol") { if (!s.escort) patrols++; } // 14а: наёмный конвой — не казённый патруль
-      else if (s.faction === "trader") traders++;
-    }
-    const pirateCap = this.pirateStrength();
-    if (pirates < pirateCap) this.spawnAtEdge("pirate");
-    // constabulary strength is per system, gated by the treasury (Этап 11b)
-    const patrolCap = this.patrolStrength();
-    if (!this.hereOccupied() && patrols < patrolCap) this.spawnAtEdge("patrol");
-    // «Варта»: a fat treasury commissions one heavy cruiser for the system
-    if (!this.hereOccupied() && this.pools.patrol >= PATROL_ECON.TREASURY_FULL
-      && !this.ships.some((s) => s.active && s.cruiser)) this.spawnCruiser();
-    if (traders < POPULATION.TRADERS) this.spawnAtEdge("trader");
-    // clan haulers (Этап 8, 14с): уличный чёрный рынок открыт в каждом порту —
-    // сходняк кормит кланов везде, а на клановой воде караванов вдвое гуще
-    {
-      const want = this.smuggleHere() ? SMUGGLER.COUNT : SMUGGLER.STREET_COUNT;
-      let smugglers = 0;
-      for (const s of this.ships) if (s.active && s.smuggler) smugglers++;
-      if (smugglers < want) this.spawnSmuggler();
-    }
-  }
+  /** Потолки флотов и единичное пополнение за тик — целиком в spawn.ts (13f). */
+  private maintainPopulation(): void { spawn.maintainPopulation(this); }
 
   /* ================================================================== */
   /* AI                                                                  */
