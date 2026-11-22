@@ -1019,7 +1019,11 @@ world (x, y) → three (x, 0, −z) — совпадает с `__gameProbe {z: �
   референс — Login.tsx. Разовым большим PR не делать: файл за файлом, чтобы не
   мешать другим задачам. Системные названия (Эйдолон и т.п.) — единый словарь
   `world.*`.
-- [ ] **16c. Регистрация через почту.** 🔄 В РАБОТЕ (трек А, 2026-11-22).
+- [x] **16c. Регистрация через почту.** ✅ ГОТОВО (трек А + владелец, 2026-11-22).
+  Инфраструктура закрыта: postfix на VPS (релей только с localhost), DNS b5s.ru —
+  MX и SPF (`v=spf1 mx -all`), прод запущен с MAIL_TRANSPORT=smtp, боевой тест
+  письма с кодом прошёл. HTTPS: Caddy + Let's Encrypt (редирект 308 http→https,
+  WS через прокси работает, сертификат до 2027-02-20).
   Ход: сервер — `server/mail.mjs` (zero-dep SMTP-клиент для postfix на
   localhost; транспорты smtp/log/off через MAIL_TRANSPORT); регистрация с
   email → код 6 цифр (15 мин, ≤5 попыток), токен и подпитка пулов (+1M ₡)
@@ -1033,10 +1037,8 @@ world (x, y) → three (x, 0, −z) — совпадает с `__gameProbe {z: �
   Клиент: `src/auth/client.ts` (verify/resend/reset), Login.tsx — три режима
   (auth/verify/reset) с i18n; авто-переход на ввод кода при email_not_verified.
   Автотест `server/test-mail.mjs` — 18/18. Письма двуязычные (RU+EN),
-  MAIL_FROM=noreply@b5s.ru.
-  Осталось (владелец): postfix на 141.133.207.47 (принимает релей с localhost),
-  DNS b5s.ru: A (есть), MX/SPF (`v=spf1 mx -all`), DKIM; запуск с
-  MAIL_TRANSPORT=smtp.
+  MAIL_FROM=noreply@b5s.ru. Опционально позже: DKIM (opendkim), если письма
+  будут падать в спам.
 
 ### Конвенция статусов задач (договорённость 2026-11-21)
 Работа ведётся вдвоём. Кто берёт задачу — ставит у пункта пометку
